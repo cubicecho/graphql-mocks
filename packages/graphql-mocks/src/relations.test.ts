@@ -246,11 +246,17 @@ describe('relations non-null policy', () => {
   });
 
   it('keeps a query executable when relations empty the graph', () => {
-    const mocks = buildMocks(schema, { seed: 1, count: 2, relations: 0 });
+    // Everything empty except the root, so the query has rows whose non-null `user` field
+    // is exactly the one a `_default: 0` cannot legally empty.
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: 2,
+      relations: { Query: { todos: 2 }, _default: 0 },
+    });
     const data = mocks.dataForOperation(parse('{ todos { id user { name } } }')) as {
       todos: { user: { name: string } | null }[];
     };
-    expect(data.todos.length).toBeGreaterThan(0);
+    expect(data.todos).toHaveLength(2);
     for (const todo of data.todos) expect(todo.user?.name).toEqual(expect.any(String));
   });
 
@@ -422,5 +428,64 @@ describe('relations reciprocity', () => {
       expect.stringContaining('the inverse of "Author.books" is ambiguous'),
     );
     warn.mockRestore();
+  });
+});
+
+describe('relations on the operation path', () => {
+  const query = (source: string) => parse(source);
+
+  it('sizes a root list field', () => {
+    const mocks = buildMocks(schema, { seed: 1, relations: { Query: { users: 3 } } });
+    const data = mocks.dataForOperation(query('{ users { id } }')) as { users: unknown[] };
+    expect(data.users).toHaveLength(3);
+  });
+
+  it('empties a root list field', () => {
+    const mocks = buildMocks(schema, { seed: 1, relations: { Query: { users: null } } });
+    const data = mocks.dataForOperation(query('{ users { id } }')) as { users: unknown[] };
+    expect(data.users).toEqual([]);
+  });
+
+  it('nulls a nullable root field', () => {
+    const mocks = buildMocks(schema, { seed: 1, relations: { Query: { user: null } } });
+    const data = mocks.dataForOperation(query('{ user(id: "1") { id } }')) as { user: unknown };
+    expect(data.user).toBeNull();
+  });
+
+  it('lets a function choose which root objects come back', () => {
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      stableIds: true,
+      relations: { Query: { users: ({ pool }) => pool.slice(0, 2) } },
+    });
+    const data = mocks.dataForOperation(query('{ users { id } }')) as { users: { id: string }[] };
+    expect(data.users.map((u) => u.id)).toEqual(['User-0', 'User-1']);
+  });
+
+  it('returns every possible type for all on an abstract root field', () => {
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: 2,
+      resolveType: () => 'Post',
+      relations: { Query: { search: 'all' } },
+    });
+    const data = mocks.dataForOperation(query('{ search(query: "x") { __typename } }')) as {
+      search: unknown[];
+    };
+    expect(data.search).toHaveLength(6);
+  });
+
+  it('rejects a root field the operation type does not have', () => {
+    expect(() => buildMocks(schema, { seed: 1, relations: { Query: { nope: 1 } } })).toThrow(
+      /unknown field "Query.nope"/,
+    );
+  });
+
+  it('leaves a root field to the default sizing when relations say nothing about it', () => {
+    const mocks = buildMocks(schema, { seed: 3, count: 4, relations: { User: { todos: 1 } } });
+    const data = mocks.dataForOperation(query('{ users { id } }')) as { users: unknown[] };
+    // The 1-to-5 default, clamped by the pool — untouched by an entry for another type.
+    expect(data.users.length).toBeGreaterThanOrEqual(1);
+    expect(data.users.length).toBeLessThanOrEqual(4);
   });
 });
