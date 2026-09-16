@@ -28,9 +28,12 @@ import {
   activeArgNames,
   applyArgPlan,
   buildArgPlan,
+  echoFromPlan,
   partitionWindow,
   resolveArgMatching,
+  resolveListTarget,
 } from './argMatching.js';
+import { paginate } from './collection.js';
 import { qaFallbackText, qaListLength } from './qa.js';
 import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
@@ -176,6 +179,119 @@ function sizedWindow<T>(
   return items.slice(0, faker.number.int({ min: Math.min(bounds.min, max), max }));
 }
 
+/** A pooled instance, as opposed to a scalar or null the pool may also hold. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Whether a plan matched on a field of the type it was built for, rather than a free-text term. */
+function namesOwnField(plan: ArgPlan): boolean {
+  return plan.equality.length > 0 || plan.contains.some((match) => match.field !== null);
+}
+
+/**
+ * Rebuild a Relay edge list around matched nodes. The edges themselves carry cursors and a
+ * `__typename`, so they are taken from the edge type's own pool and have their `node` replaced —
+ * building `{ node }` from nothing would drop every other field the selection might ask for.
+ */
+function buildEdges(
+  ctx: ResolveContext,
+  edgeTypeName: string,
+  nodes: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const edges = ctx.pool[edgeTypeName] ?? [];
+  return nodes.map((node, index) => {
+    const template = edges.length > 0 ? edges[index % edges.length] : undefined;
+    return { ...(template ?? { __typename: edgeTypeName }), node };
+  });
+}
+
+/**
+ * Bring a Relay `pageInfo` in line with the page that was just produced. Only keys the pooled
+ * `pageInfo` already has are touched, so a partial or custom shape keeps whatever it had.
+ */
+function syncPageInfo(
+  wrapper: Record<string, unknown>,
+  edges: readonly Record<string, unknown>[],
+  skip: number,
+  total: number,
+): Record<string, unknown> | undefined {
+  const pageInfo = wrapper.pageInfo;
+  if (!isRecord(pageInfo)) return undefined;
+  const cursorOf = (edge: Record<string, unknown> | undefined) => edge?.cursor;
+  const updated: Record<string, unknown> = { ...pageInfo };
+  if ('hasPreviousPage' in pageInfo) updated.hasPreviousPage = skip > 0;
+  if ('hasNextPage' in pageInfo) updated.hasNextPage = skip + edges.length < total;
+  if ('startCursor' in pageInfo) updated.startCursor = cursorOf(edges[0]) ?? null;
+  if ('endCursor' in pageInfo) updated.endCursor = cursorOf(edges[edges.length - 1]) ?? null;
+  return updated;
+}
+
+/**
+ * Apply a field's arguments to the list *inside* the wrapper type it returns, and hand back a
+ * copy of a pooled wrapper with that list replaced. Undefined means "not a wrapper this can
+ * read", and the caller falls through to the ordinary draw.
+ *
+ * The replacement list is drawn from the entity's own pool rather than from whatever the wrapper
+ * happened to be wired with in phase 2 — the same switch a direct list field makes when it is
+ * paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper is
+ * copied, never mutated: it is shared with every other operation resolved from this graph.
+ */
+function unwrapListArgs(
+  ctx: ResolveContext,
+  named: GraphQLNamedType,
+  args: Record<string, unknown>,
+  info: RootFieldInfo,
+  items: Record<string, unknown>[],
+  outerPlan: ArgPlan | null,
+): unknown {
+  if (!ctx.arg.enabled) return undefined;
+  // An argument that names a field on the returned type itself is about *that* object, not
+  // about a list hanging off it: `warehouse(id: "w-1")` asks for one warehouse even though
+  // `Warehouse.items` is the only object list on it. Only arguments that name nothing there —
+  // a free-text search, paging — can be about the rows one level down.
+  if (outerPlan && namesOwnField(outerPlan)) return undefined;
+  const target = resolveListTarget(named, ctx.arg);
+  if (!target) return undefined;
+
+  const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
+  // Matched as a list: `take`/`skip` only mean anything against one.
+  const plan = buildArgPlan(fieldDefinition(info), target.entityType, true, args, active, ctx.arg);
+  if (!plan) return undefined;
+
+  const wrapper = pickRelated(items, SINGULAR_BOUNDS, false, ctx.resolved.faker);
+  if (!isRecord(wrapper)) return undefined;
+
+  const entities = ctx.pool[target.entityType.name] ?? [];
+  const rotated = plan.partitionKey
+    ? partitionWindow(entities, plan.partitionKey, entities.length)
+    : entities;
+  // Paging is applied separately so the pre-paging count is available for `pageInfo`.
+  const { items: filtered, filterMissed } = applyArgPlan(rotated, { ...plan, hasPaging: false });
+  if (filterMissed && ctx.arg.onMissList === 'fallback') return undefined;
+  const skip = plan.hasPaging ? (plan.page.skip ?? 0) : 0;
+  // A partition selects nothing, it only says *which* rows — so the list stays the length the
+  // wrapper was wired with and only its window moves. Without this, an argument that nothing
+  // could interpret would swap a four-row panel for the entire pool.
+  const wired = wrapper[target.fieldName];
+  const windowed =
+    !plan.hasFilters && !plan.hasPaging && Array.isArray(wired)
+      ? filtered.slice(0, wired.length)
+      : filtered;
+  const paged = plan.hasPaging ? paginate(windowed, plan.page) : windowed;
+
+  if (target.edgeTypeName === undefined) {
+    return { ...wrapper, [target.fieldName]: paged };
+  }
+  const edges = buildEdges(ctx, target.edgeTypeName, paged);
+  const pageInfo = syncPageInfo(wrapper, edges, skip, windowed.length);
+  return {
+    ...wrapper,
+    [target.fieldName]: edges,
+    ...(pageInfo ? { pageInfo } : {}),
+  };
+}
+
 /**
  * Resolve a root operation field to instances drawn from the mock pool by its return type.
  *
@@ -276,6 +392,15 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
 
   const items = pool[named.name];
   if (items && items.length > 0) {
+    // A field returning a wrapper describes the collection inside it, not the container: its
+    // `take`/`search`/`id` are about the rows. So when the wrapper has a list this can read,
+    // the inner match wins over anything the arguments happened to say about the wrapper —
+    // a free-text `search` matches no string field on a `{ results, totalCount }` anyway, and
+    // would only empty it.
+    if (!isList && isObjectType(named)) {
+      const unwrapped = unwrapListArgs(ctx, named, args, info, items, plan);
+      if (unwrapped !== undefined) return unwrapped;
+    }
     if (plan) {
       const source = plan.partitionKey
         ? partitionWindow(items, plan.partitionKey, items.length)
@@ -293,7 +418,15 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
       }
       if (isList && ctx.arg.onMissList === 'empty') return [];
       if (!isList && !isNonNullSingular && ctx.arg.onMissSingular === 'empty') return null;
-      // else: fall through to the plain pooled draw below
+      // A singular miss falls back to a random instance below. Stamp the values the caller
+      // actually stated back over a *copy* of it, so a mutation reads back what it was handed
+      // instead of somebody else's record. The pooled instance itself is never touched.
+      if (!isList) {
+        const echo = ctx.arg.echoOnMiss ? echoFromPlan(plan) : null;
+        const picked = pickRelated(items, bounds, isList, faker);
+        if (echo && isRecord(picked)) return { ...picked, ...echo };
+        return picked;
+      }
     }
     return pickRelated(items, bounds, isList, faker);
   }
