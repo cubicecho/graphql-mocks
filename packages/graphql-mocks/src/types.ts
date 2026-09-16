@@ -121,16 +121,22 @@ export interface LooseRelationsMap {
   /**
    * Also write each wired relationship back onto its inverse field, so `user.todos[i].user`
    * is that same user. Lossy where an object is shared by two owners — last writer wins.
+   *
+   * `'hidden'` wires the same references but defines them non-enumerable, so `JSON.stringify`
+   * and `Object.entries`-based walks skip them while `todo.user` still reads normally. Forward
+   * relationship fields can form cycles of their own, so this narrows the problem rather than
+   * removing it — `toPlain` is the general answer.
+   *
    * @default false
    */
-  _reciprocal?: boolean;
-  [typeName: string]: TypeRelations<unknown> | RelationSpec | boolean | undefined;
+  _reciprocal?: boolean | 'hidden';
+  [typeName: string]: TypeRelations<unknown> | RelationSpec | boolean | 'hidden' | undefined;
 }
 
 /** The `relations` map when a `TTypes` map is supplied: type and field names are checked. */
 export type TypedRelationsMap<TTypes extends Record<string, unknown>> = {
   _default?: RelationSpec;
-  _reciprocal?: boolean;
+  _reciprocal?: boolean | 'hidden';
 } & { [K in keyof TTypes]?: TypeRelations<TTypes[K]> };
 
 /**

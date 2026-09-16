@@ -23,6 +23,8 @@ const EXPORTS = [
   'resolveRelation',
   'resolveScalarMocker',
   'searchItems',
+  'select',
+  'toPlain',
 ];
 
 describe('index', () => {

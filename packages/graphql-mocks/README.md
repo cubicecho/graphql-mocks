@@ -414,6 +414,43 @@ mocks.mockOperation(UserByIdQuery, { variables: { id }, matchArguments: true });
 
 Pair it with `stableIds: true` for readable, stable values.
 
+## Pooled objects are cyclic
+
+Pooled objects are wired into a graph, not a tree: `post.author` is a pooled `User` whose `posts`
+list contains that same post. With `relations: { _reciprocal: true }` the back-references make it
+worse. Anything that walks a mock **generically** therefore needs a cycle guard — a validation
+pass, a snapshot, `JSON.stringify` for a fixture, a deep-equality assertion, `structuredClone`
+across a worker boundary — or it ends in `RangeError: Maximum call stack size exceeded`.
+
+Two exports save you writing that guard:
+
+```ts
+import { select, toPlain } from '@vantreeseba/graphql-mocks';
+
+JSON.stringify(toPlain(mocks.User[0]));      // cycle-free deep copy
+select(mocks.User[0], UserRowFragmentDoc);   // shaped to a document's selection set
+```
+
+`toPlain(value, options?)` deep-copies, cutting any reference that points back into the path it is
+copying. `onCycle` says what the cut looks like — `'stub'` (the default) leaves
+`{ __typename, id }`, `'null'` leaves `null`, `'omit'` drops the property (array *entries* still
+become `null`, since dropping one would shift the indices after it). `maxDepth` cuts at a fixed
+depth with the same strategy. An object that merely appears twice is copied twice; only a real
+cycle is cut.
+
+`select(value, document, options?)` projects onto a query, mutation or bare fragment document:
+the fields it asks for, under the aliases it asks for them, and nothing else. Because the shape
+follows the document rather than the object graph, the result is cycle-free by construction —
+which is usually what you wanted anyway. Pass `{ schema }` when a fragment's type condition is an
+interface or union, and `{ operationName }` to pick between operations. `@skip` / `@include` are
+not evaluated.
+
+There is also `relations: { _reciprocal: 'hidden' }`, which wires the mirrored back-references as
+**non-enumerable** properties: `todo.user` still reads normally, but `JSON.stringify` and
+`Object.entries` walks skip it. That narrows the problem rather than removing it — forward
+relationship fields still form cycles of their own — so reach for `toPlain` when you need a
+guarantee.
+
 ## Deriving mocks from a document module
 
 ```ts
@@ -572,7 +609,8 @@ Notes:
 - Wiring is one-directional by default: `user.todos[0].user` is some other user. Set
   `relations: { _reciprocal: true }` to have each reference written back into its inverse field
   where one exists unambiguously. It's lossy in one direction — a todo in two users' lists can
-  only point at one owner, and the last write wins.
+  only point at one owner, and the last write wins. `'hidden'` instead of `true` defines those
+  back-references non-enumerable — see [Pooled objects are cyclic](#pooled-objects-are-cyclic).
 
 ### Named scenarios
 

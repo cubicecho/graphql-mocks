@@ -25,6 +25,7 @@ import { qaListLength } from './qa.js';
 import {
   isReciprocal,
   pickRelated,
+  reciprocalEnumerable,
   relationBounds,
   relationDemand,
   resolveRelation,
@@ -321,13 +322,33 @@ function findInverseField(
  * Mirror every wired relationship back onto its inverse field, so `user.todos[i].user` is
  * that same user. Opt-in via `relations: { _reciprocal: true }`, and inherently lossy in one
  * direction: a Todo in two users' lists can only point at one owner, so the last write wins.
+ *
+ * `enumerable` is false under `_reciprocal: 'hidden'`: the back-reference still reads normally,
+ * but a generic walk never enumerates it, so the cycle it creates stays out of the way of
+ * `JSON.stringify` and friends.
  */
 function wireReciprocal(
   schema: GraphQLSchema,
   objectTypes: GraphQLObjectType[],
   pool: Record<string, Record<string, unknown>[]>,
   plansByType: Map<string, FieldPlan[]>,
+  enumerable: boolean,
 ): void {
+  /** Assign the inverse field, hiding it from enumeration when that's what was asked for. */
+  const write = (target: Record<string, unknown>, fieldName: string, value: unknown) => {
+    if (enumerable) {
+      target[fieldName] = value;
+      return;
+    }
+    // Phase 2 already wrote the field as an ordinary property, so redefine rather than assign.
+    Object.defineProperty(target, fieldName, {
+      value,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  };
+
   for (const objectType of objectTypes) {
     for (const plan of plansByType.get(objectType.name) ?? []) {
       const targetType = schema.getType(plan.targetName);
@@ -356,12 +377,12 @@ function wireReciprocal(
 
         for (const target of related) {
           if (!inverse.isList) {
-            target[inverse.fieldName] = instance;
+            write(target, inverse.fieldName, instance);
             continue;
           }
           const existing = target[inverse.fieldName];
           if (!Array.isArray(existing)) {
-            target[inverse.fieldName] = [instance];
+            write(target, inverse.fieldName, [instance]);
           } else if (!existing.includes(instance)) {
             existing.push(instance);
           }
@@ -461,7 +482,13 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
 
   // Phase 3: mirror relationships onto their inverse fields, when asked to.
   if (isReciprocal(resolved.relations)) {
-    wireReciprocal(schema, objectTypes, pool, plansByType);
+    wireReciprocal(
+      schema,
+      objectTypes,
+      pool,
+      plansByType,
+      reciprocalEnumerable(resolved.relations),
+    );
   }
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
