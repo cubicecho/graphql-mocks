@@ -236,21 +236,38 @@ Paging switches the source from a random subset to the whole pool in stable orde
 buildMocks(schema, { count: 50, listSize: { min: 10, max: 20 }, matchArguments: true });
 ```
 
-**Known limitation.** When a root field returns a wrapper type (`{ totalCount, results }`), the entity list sits one level below the arguments and the engine cannot connect them. Use a resolver function plus the exported `paginate` / `searchItems` there:
+### Wrapper and connection types
+
+Most paginated APIs don't return the list directly — they wrap it:
+
+```graphql
+type Query { products(take: Int, skip: Int, search: String): ProductSearchResult! }
+type ProductSearchResult { results: [Product!]!, totalCount: Int! }
+```
+
+The arguments are on the root field, but the rows to page are under `results`. So when a field returns an object that holds a list, matching is applied to the **list's** type and a copy of the wrapper comes back with that list replaced:
 
 ```ts
-import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
+mocks.dataForOperation(parse('{ products(skip: 10, take: 5) { results { id } } }'));
+// { products: { results: [ …the 11th–15th pooled products… ], totalCount: … } }
+```
 
-mocks.mockOperation(SearchUsersQuery, {
-  dynamic: true,
-  transform: (data, vars) => ({
-    searchUsers: {
-      ...data.searchUsers,
-      results: paginate(searchItems(mocks.User, vars.term), vars),
-    },
-  }),
+The list is drawn from the entity's own pool, in stable order — the same switch a direct list field makes when it is paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper itself is never mutated.
+
+Relay connections are recognized too: `edges` are filtered and paged by their `node`, rebuilt as edges (cursors and all), and `pageInfo` is brought in line with the page — `hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, but only the keys the schema actually declares.
+
+The list is found by explicit config first, then the Relay shape, then **exactly one** object-typed list field. "Exactly one" is the safeguard: with two lists there is no way to tell which one `take` refers to, so nothing is guessed and the wrapper comes back as before. Scalar lists (`tags: [String!]`) are fields of the wrapper, not its rows, and don't count.
+
+```ts
+buildMocks(schema, {
+  matchArguments: {
+    unwrap: true,                              // on by default
+    listPath: { ShelfResult: 'clearance' },    // or a bare 'results' for every wrapper
+  },
 });
 ```
+
+A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page.
 
 ## Resolver-function mocks
 

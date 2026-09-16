@@ -7,6 +7,7 @@ import {
   isInterfaceType,
   isObjectType,
   isScalarType,
+  isUnionType,
 } from 'graphql';
 import { type PageArgs, paginate, searchItems } from './collection.js';
 import { unwrapType } from './typeMocker.js';
@@ -47,6 +48,19 @@ export interface ArgMatchingOptions {
    * @default { singular: 'fallback', list: 'empty' }
    */
   onMiss?: ArgMissBehavior | { singular?: ArgMissBehavior; list?: ArgMissBehavior };
+  /**
+   * When a field returns a wrapper around a list (`{ results, totalCount }`, a Relay
+   * connection), match the arguments against the *list's* type instead of the wrapper's, which
+   * has no field named `search` or `take` to match on.
+   * @default true
+   */
+  unwrap?: boolean;
+  /**
+   * Which field holds the list, for a wrapper the heuristics can't read: a field name used for
+   * every wrapper, or a map from wrapper type name to field name
+   * (`{ ProductSearchResult: 'results' }`).
+   */
+  listPath?: string | Record<string, string>;
 }
 
 export interface ResolvedArgMatching {
@@ -61,6 +75,8 @@ export interface ResolvedArgMatching {
   ignoreArgs: ReadonlySet<string>;
   onMissSingular: ArgMissBehavior;
   onMissList: ArgMissBehavior;
+  unwrap: boolean;
+  listPath: string | Record<string, string> | undefined;
 }
 
 const DEFAULT_OFFSET_ARGS = ['skip', 'offset'] as const;
@@ -90,6 +106,8 @@ export function resolveArgMatching(
     ignoreArgs: new Set(config.ignoreArgs ?? []),
     onMissSingular: missFor('singular', 'fallback'),
     onMissList: missFor('list', 'empty'),
+    unwrap: config.unwrap ?? true,
+    listPath: config.listPath,
   };
 }
 
@@ -258,6 +276,92 @@ export function buildArgPlan(
   const hasFilters = equality.length > 0 || contains.length > 0;
   if (!hasFilters && !hasPaging) return null;
   return { equality, contains, page, hasFilters, hasPaging };
+}
+
+/** Where a wrapper type keeps the list its field's arguments are really about. */
+export interface ListTarget {
+  /** The wrapper field holding the list. */
+  fieldName: string;
+  /** The type the arguments are matched against — the list's element type, or a Relay node. */
+  entityType: GraphQLNamedType;
+  /**
+   * Set when the list is a Relay edge list. The elements are edges wrapping the entity, so the
+   * caller has to rebuild them rather than dropping matched entities straight in.
+   */
+  edgeTypeName?: string;
+}
+
+/** Object-typed list fields of `named`, in declaration order. */
+function objectListFields(
+  named: GraphQLNamedType,
+): { fieldName: string; namedType: GraphQLNamedType }[] {
+  if (!isObjectType(named) && !isInterfaceType(named)) return [];
+  const found: { fieldName: string; namedType: GraphQLNamedType }[] = [];
+  for (const [fieldName, field] of Object.entries(named.getFields())) {
+    const { namedType, isList } = unwrapType(field.type);
+    if (!isList) continue;
+    if (!isObjectType(namedType) && !isInterfaceType(namedType) && !isUnionType(namedType)) {
+      continue;
+    }
+    found.push({ fieldName, namedType });
+  }
+  return found;
+}
+
+/** The `node` field's type on a Relay edge, or undefined when this isn't one. */
+function relayNodeType(edgeType: GraphQLNamedType): GraphQLNamedType | undefined {
+  if (!isObjectType(edgeType) && !isInterfaceType(edgeType)) return undefined;
+  const node = edgeType.getFields().node;
+  return node ? unwrapType(node.type).namedType : undefined;
+}
+
+/**
+ * Find the list a wrapper type's arguments are actually about.
+ *
+ * `products(take: Int, search: String): ProductSearchResult!` puts the arguments on the root
+ * field but the rows one level down, under `results`. Matching against `ProductSearchResult`
+ * finds nothing — it has no `take` or `search` field — and silently returns the wrapper
+ * untouched, which is what makes paging controls in a story do nothing.
+ *
+ * Resolution order is explicit config, then the Relay shape, then a wrapper with exactly one
+ * object-typed list. "Exactly one" is the whole safeguard: with two lists there is no way to
+ * tell which one `take` refers to, so nothing is guessed and the old behavior stands.
+ */
+export function resolveListTarget(
+  named: GraphQLNamedType,
+  config: ResolvedArgMatching,
+): ListTarget | undefined {
+  if (!config.unwrap) return undefined;
+  const lists = objectListFields(named);
+
+  const configured =
+    typeof config.listPath === 'string' ? config.listPath : config.listPath?.[named.name];
+  if (configured !== undefined) {
+    const match = lists.find((entry) => entry.fieldName === configured);
+    if (!match) {
+      const where = `"${named.name}.${configured}"`;
+      const hint = 'is not an object list field, so the arguments were left on the wrapper';
+      console.warn(`[graphql-mocks] matchArguments.listPath: ${where} ${hint}`);
+      return undefined;
+    }
+    return asTarget(match);
+  }
+
+  const edges = lists.find((entry) => entry.fieldName === 'edges');
+  if (edges && relayNodeType(edges.namedType)) return asTarget(edges);
+
+  const [only] = lists;
+  if (lists.length === 1 && only) return asTarget(only);
+  return undefined;
+}
+
+/** Turn a located list field into a target, resolving the Relay indirection if there is one. */
+function asTarget(entry: { fieldName: string; namedType: GraphQLNamedType }): ListTarget {
+  const node = relayNodeType(entry.namedType);
+  if (node) {
+    return { fieldName: entry.fieldName, entityType: node, edgeTypeName: entry.namedType.name };
+  }
+  return { fieldName: entry.fieldName, entityType: entry.namedType };
 }
 
 function matchesEquality(item: Record<string, unknown>, match: EqualityMatch): boolean {

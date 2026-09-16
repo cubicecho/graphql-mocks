@@ -28,7 +28,9 @@ import {
   applyArgPlan,
   buildArgPlan,
   resolveArgMatching,
+  resolveListTarget,
 } from './argMatching.js';
+import { paginate } from './collection.js';
 import { qaFallbackText, qaListLength } from './qa.js';
 import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
@@ -100,6 +102,97 @@ function planFor(
   if (!ctx.arg.enabled) return null;
   const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
   return buildArgPlan(fieldDefinition(info), named, isList, args, active, ctx.arg);
+}
+
+/** A pooled instance, as opposed to a scalar or null the pool may also hold. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Rebuild a Relay edge list around matched nodes. The edges themselves carry cursors and a
+ * `__typename`, so they are taken from the edge type's own pool and have their `node` replaced —
+ * building `{ node }` from nothing would drop every other field the selection might ask for.
+ */
+function buildEdges(
+  ctx: ResolveContext,
+  edgeTypeName: string,
+  nodes: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const edges = ctx.pool[edgeTypeName] ?? [];
+  return nodes.map((node, index) => {
+    const template = edges.length > 0 ? edges[index % edges.length] : undefined;
+    return { ...(template ?? { __typename: edgeTypeName }), node };
+  });
+}
+
+/**
+ * Bring a Relay `pageInfo` in line with the page that was just produced. Only keys the pooled
+ * `pageInfo` already has are touched, so a partial or custom shape keeps whatever it had.
+ */
+function syncPageInfo(
+  wrapper: Record<string, unknown>,
+  edges: readonly Record<string, unknown>[],
+  skip: number,
+  total: number,
+): Record<string, unknown> | undefined {
+  const pageInfo = wrapper.pageInfo;
+  if (!isRecord(pageInfo)) return undefined;
+  const cursorOf = (edge: Record<string, unknown> | undefined) => edge?.cursor;
+  const updated: Record<string, unknown> = { ...pageInfo };
+  if ('hasPreviousPage' in pageInfo) updated.hasPreviousPage = skip > 0;
+  if ('hasNextPage' in pageInfo) updated.hasNextPage = skip + edges.length < total;
+  if ('startCursor' in pageInfo) updated.startCursor = cursorOf(edges[0]) ?? null;
+  if ('endCursor' in pageInfo) updated.endCursor = cursorOf(edges[edges.length - 1]) ?? null;
+  return updated;
+}
+
+/**
+ * Apply a field's arguments to the list *inside* the wrapper type it returns, and hand back a
+ * copy of a pooled wrapper with that list replaced. Undefined means "not a wrapper this can
+ * read", and the caller falls through to the ordinary draw.
+ *
+ * The replacement list is drawn from the entity's own pool rather than from whatever the wrapper
+ * happened to be wired with in phase 2 — the same switch a direct list field makes when it is
+ * paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper is
+ * copied, never mutated: it is shared with every other operation resolved from this graph.
+ */
+function unwrapListArgs(
+  ctx: ResolveContext,
+  named: GraphQLNamedType,
+  args: Record<string, unknown>,
+  info: RootFieldInfo,
+  items: Record<string, unknown>[],
+): unknown {
+  if (!ctx.arg.enabled) return undefined;
+  const target = resolveListTarget(named, ctx.arg);
+  if (!target) return undefined;
+
+  const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
+  // Matched as a list: `take`/`skip` only mean anything against one.
+  const plan = buildArgPlan(fieldDefinition(info), target.entityType, true, args, active, ctx.arg);
+  if (!plan) return undefined;
+
+  const wrapper = pickRelated(items, SINGULAR_BOUNDS, false, ctx.resolved.faker);
+  if (!isRecord(wrapper)) return undefined;
+
+  const entities = ctx.pool[target.entityType.name] ?? [];
+  // Paging is applied separately so the pre-paging count is available for `pageInfo`.
+  const { items: filtered, filterMissed } = applyArgPlan(entities, { ...plan, hasPaging: false });
+  if (filterMissed && ctx.arg.onMissList === 'fallback') return undefined;
+  const skip = plan.hasPaging ? (plan.page.skip ?? 0) : 0;
+  const paged = plan.hasPaging ? paginate(filtered, plan.page) : filtered;
+
+  if (target.edgeTypeName === undefined) {
+    return { ...wrapper, [target.fieldName]: paged };
+  }
+  const edges = buildEdges(ctx, target.edgeTypeName, paged);
+  const pageInfo = syncPageInfo(wrapper, edges, skip, filtered.length);
+  return {
+    ...wrapper,
+    [target.fieldName]: edges,
+    ...(pageInfo ? { pageInfo } : {}),
+  };
 }
 
 /**
@@ -202,6 +295,15 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
 
   const items = pool[named.name];
   if (items && items.length > 0) {
+    // A field returning a wrapper describes the collection inside it, not the container: its
+    // `take`/`search`/`id` are about the rows. So when the wrapper has a list this can read,
+    // the inner match wins over anything the arguments happened to say about the wrapper —
+    // a free-text `search` matches no string field on a `{ results, totalCount }` anyway, and
+    // would only empty it.
+    if (!isList && isObjectType(named)) {
+      const unwrapped = unwrapListArgs(ctx, named, args, info, items);
+      if (unwrapped !== undefined) return unwrapped;
+    }
     if (plan) {
       const { items: matched, filterMissed } = applyArgPlan(items, plan);
       if (!filterMissed) {
