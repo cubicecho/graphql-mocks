@@ -27,6 +27,7 @@ import {
   activeArgNames,
   applyArgPlan,
   buildArgPlan,
+  echoFromPlan,
   resolveArgMatching,
 } from './argMatching.js';
 import { qaFallbackText, qaListLength } from './qa.js';
@@ -100,6 +101,11 @@ function planFor(
   if (!ctx.arg.enabled) return null;
   const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
   return buildArgPlan(fieldDefinition(info), named, isList, args, active, ctx.arg);
+}
+
+/** A pooled instance, as opposed to a scalar or null the pool may also hold. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -211,7 +217,15 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
       }
       if (isList && ctx.arg.onMissList === 'empty') return [];
       if (!isList && !isNonNullSingular && ctx.arg.onMissSingular === 'empty') return null;
-      // else: fall through to the plain pooled draw below
+      // A singular miss falls back to a random instance below. Stamp the values the caller
+      // actually stated back over a *copy* of it, so a mutation reads back what it was handed
+      // instead of somebody else's record. The pooled instance itself is never touched.
+      if (!isList) {
+        const echo = ctx.arg.echoOnMiss ? echoFromPlan(plan) : null;
+        const picked = pickRelated(items, bounds, isList, faker);
+        if (echo && isRecord(picked)) return { ...picked, ...echo };
+        return picked;
+      }
     }
     return pickRelated(items, bounds, isList, faker);
   }

@@ -217,9 +217,42 @@ buildMocks(schema, {
     limitArgs: ['limit', 'pageSize'],
     ignoreArgs: ['locale'],
     onMiss: { singular: 'fallback', list: 'empty' },
+    flattenInputs: true,        // look inside input objects — on by default
+    flattenDepth: 1,
+    echoOnMiss: true,
   },
 });
 ```
+
+### Nested input objects
+
+Generated schemas rarely put the interesting argument at the top level. `where: { id: $id }` and `data: { title: $title }` are the normal shapes, and matching against the wrapper name alone would find nothing — `user(id: $id)` would resolve correctly while `account(where: { id: $id })` returned a random account.
+
+So input objects are flattened one level before matching, and their fields are matched under their own names:
+
+```ts
+// where: { id: "Account-2" }        → equality on Account.id
+// where: { id: { equals: "…" } }    → the ORM operator form, unwrapped
+// where: { id: { in: ["a", "b"] } } → an `in` match
+// data:  { name: "Acme", tier: 2 }  → equality on both fields
+```
+
+`equals` / `eq` / `is` / `_eq` and `in` / `_in` are recognized as operator objects and stand in for their inner value; a comparison that isn't one of those (`gte`, `contains`, `not`) is left alone rather than guessed at. Depth stops at 1 by default, so `where: { owner: { id } }` does **not** reach through — that `id` names the *owner*, not the returned type. Raise `flattenDepth`, or turn the whole thing off with `flattenInputs: false`. `ignoreArgs` applies to nested names too, so `ignoreArgs: ['tier']` skips `data.tier` and `ignoreArgs: ['where']` skips the wrapper whole.
+
+Authorship still travels with the values: a `where: { id: $id }` whose `$id` was invented to satisfy execution counts as *not* stated, the same as a top-level `id: $id`, and the field falls back to its random pick.
+
+### Mutations echo what they were handed
+
+A mutation has no pooled instance carrying the values it was just given, so `createTodo(input: { title: "Ship the release" })` always misses — and a random todo with somebody else's title is the one thing a test just asserted on. On a **singular** miss the stated values are stamped back over a copy of the fallback instance:
+
+```ts
+mocks.dataForOperation(
+  parse('mutation { createTodo(input: { title: "Ship the release", priority: HIGH }) { … } }'),
+);
+// { createTodo: { title: 'Ship the release', priority: 'HIGH', id: 'Todo-3', completed: false, … } }
+```
+
+Only fields the caller actually named are replaced; everything else stays generated, and the pooled instance itself is never mutated. `echoOnMiss: false` restores the plain random fallback.
 
 **Variables you didn't supply are ignored.** Required variables are auto-filled so execution can run, and any argument bound to one of those invented values is dropped — so `mocks.mockOperation(UserByIdQuery)` with no variables still returns a random pooled user, exactly as with matching off. A variable you pass, a literal, or a schema/document default counts as intent and is applied.
 
