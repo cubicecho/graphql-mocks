@@ -23,6 +23,11 @@ import {
   resolveListSize,
 } from './helpers.js';
 import {
+  type OperationMocks,
+  type OperationModule,
+  buildOperationMocks,
+} from './operationsFrom.js';
+import {
   type MockHandlerOptions,
   type MockRequestHandler,
   createRequestHandler,
@@ -143,6 +148,21 @@ function createMockResult(
       return createRequestHandler(
         { schema, pool: pool as Record<string, Record<string, unknown>[]>, faker, options },
         handlerOptions,
+      );
+    },
+    mockOperationsFrom<TModule extends OperationModule>(
+      module: TModule,
+      opOptions: MockOperationOptions = {},
+    ): OperationMocks<TModule> {
+      return buildOperationMocks(
+        module,
+        (document, docOptions) =>
+          looseMockOperationVariants(
+            document as Parameters<typeof buildMockOperationVariants>[0],
+            operationData(document as Parameters<typeof buildMockOperation>[0], docOptions ?? {}),
+            docOptions,
+          ),
+        opOptions,
       );
     },
     toResolvers(): Record<string, () => unknown> {

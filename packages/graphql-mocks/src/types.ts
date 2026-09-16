@@ -9,6 +9,7 @@ import type {
   MockedResponse,
 } from './apolloMocks.js';
 import type { ArgMatchingOptions } from './argMatching.js';
+import type { OperationMocks, OperationModule } from './operationsFrom.js';
 import type { MockHandlerOptions, MockRequestHandler } from './requestHandler.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
@@ -212,6 +213,25 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
     operation: TypedDocumentNode<TData, TVars>,
     options?: MockOperationOptions<TVars, TData>,
   ): MockOperationVariants<TData, TVars>;
+  /**
+   * Turn a codegen document module into a keyed map of {@link MockHelpers.mockOperationVariants}
+   * results, replacing a file of per-operation re-exports with one call:
+   *
+   * ```ts
+   * import * as operations from './queries.generated.js';
+   * const opMocks = mocks.mockOperationsFrom(operations);
+   * // opMocks.UserByIdDocument.withResults | .withLongLoadTime | .withError
+   * ```
+   *
+   * Keys are the module's **export names**, not operation names, so each entry's
+   * `withResults.result.data` is typed to that operation. Non-document exports are skipped.
+   * Entries are built lazily on first access, so a fifty-document module costs nothing at
+   * import time — but spreading the map, or `Object.values`, forces every entry.
+   */
+  mockOperationsFrom<TModule extends OperationModule>(
+    module: TModule,
+    options?: MockOperationOptions,
+  ): OperationMocks<TModule>;
   /**
    * Build a handler that answers **any** operation from this graph — no per-operation
    * registration, so one handler covers a whole screen's queries and mutations:
