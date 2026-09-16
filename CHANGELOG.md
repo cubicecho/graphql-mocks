@@ -1,3 +1,33 @@
+# [3.1.0](https://github.com/cubicecho/graphql-mocks/compare/v3.0.0...v3.1.0) (2026-09-16)
+
+
+### Bug Fixes
+
+* **ci:** point the repository URLs at cubicecho/graphql-mocks ([e1d7e56](https://github.com/cubicecho/graphql-mocks/commit/e1d7e56f58a289337bc96b771791b3e8cfdcdef0))
+* **graphql-mocks:** keep the test suite typechecking ([4258180](https://github.com/cubicecho/graphql-mocks/commit/4258180b0af2474c16c0fcfbd3c084bb7b7554bb))
+
+
+### Features
+
+* **graphql-mocks:** accept a resolver function as mockOperation data ([0e0a661](https://github.com/cubicecho/graphql-mocks/commit/0e0a661004a6ed10d162e10454c3c510da998172))
+* **graphql-mocks:** add @vantreeseba/graphql-mocks/apollo link export ([c168d63](https://github.com/cubicecho/graphql-mocks/commit/c168d632d601c3b076fbaff6e21476d2f6fc1280))
+* **graphql-mocks:** add graph-backed request handler ([0185364](https://github.com/cubicecho/graphql-mocks/commit/0185364da951a0d01cd46419c7b291cd4ac6533c))
+* **graphql-mocks:** add ids/at/byId pool accessors ([a7d157c](https://github.com/cubicecho/graphql-mocks/commit/a7d157c116cc7785bbf8286c9dd9cdb9572a4561))
+* **graphql-mocks:** add mockScenarios factory ([3368e93](https://github.com/cubicecho/graphql-mocks/commit/3368e93fef8c415c078f748e3fda3d0114e2a9ad))
+* **graphql-mocks:** add opt-in argument-aware root field resolution ([bc65e6f](https://github.com/cubicecho/graphql-mocks/commit/bc65e6fa5e06eaac8836ad2630abd448ddafb1b0))
+* **graphql-mocks:** add opt-in reciprocal relationship wiring ([d08addb](https://github.com/cubicecho/graphql-mocks/commit/d08addbb397c8989419e158a625bcfa54b4de3f8))
+* **graphql-mocks:** add paginate/searchItems helpers and listSize option ([14bf99b](https://github.com/cubicecho/graphql-mocks/commit/14bf99b527c264b3ac00c3ecc5879fa7073f2c07))
+* **graphql-mocks:** add QA mode for out-of-norm mock data ([0d9d750](https://github.com/cubicecho/graphql-mocks/commit/0d9d75030513d88e5f1234c2b87e380dd1fd4d91)), closes [#3](https://github.com/cubicecho/graphql-mocks/issues/3)
+* **graphql-mocks:** add relation spec types and lookup ([5467ce6](https://github.com/cubicecho/graphql-mocks/commit/5467ce65f6f2772f5cf0bbd7b3f16d59498d6b87))
+* **graphql-mocks:** build a scenario × QA matrix in one call ([89e9b40](https://github.com/cubicecho/graphql-mocks/commit/89e9b408bc124986eea8b50d5ff2712e44fa5332))
+* **graphql-mocks:** derive operation mocks from a document module ([da5ce52](https://github.com/cubicecho/graphql-mocks/commit/da5ce527eb86264eeeef04f3ad243d93bd3cc8a2))
+* **graphql-mocks:** give field overrides their site and index ([cd3cc0e](https://github.com/cubicecho/graphql-mocks/commit/cd3cc0eeb02e21b4f6762a87153eeb735127bbb7))
+* **graphql-mocks:** grow pools to meet relation demand ([ae77587](https://github.com/cubicecho/graphql-mocks/commit/ae775874d50e503726bf8d1c3aae762ca685a0fa))
+* **graphql-mocks:** merge scenario layers into build options ([013b98c](https://github.com/cubicecho/graphql-mocks/commit/013b98cdaf0642be88ec538d4c005927d7cbf1bf))
+* **graphql-mocks:** shape root fields with relations ([b70a2fa](https://github.com/cubicecho/graphql-mocks/commit/b70a2fa019668171286bc4163f819cdb1fc04cb6))
+* **graphql-mocks:** validate relations and keep graphs executable ([2261527](https://github.com/cubicecho/graphql-mocks/commit/22615276ff90d7887684fe42540c11c3938c9406))
+* **graphql-mocks:** wire relations into relationship building ([0145f20](https://github.com/cubicecho/graphql-mocks/commit/0145f2018d28deed3df91af818acf5be16fc8b7c))
+
 # [3.0.0](https://github.com/cubicecho/graphql-mocks/compare/v2.3.0...v3.0.0) (2026-06-20)
 
 
