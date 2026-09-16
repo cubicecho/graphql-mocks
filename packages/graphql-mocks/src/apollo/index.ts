@@ -1,6 +1,7 @@
-import { ApolloLink, Observable } from '@apollo/client';
+import { ApolloClient, ApolloLink, InMemoryCache, Observable } from '@apollo/client';
+import { type ScenarioTarget, mockScenarios } from '../mockScenarios.js';
 import type { MockHandlerOptions, MockRequestHandler } from '../requestHandler.js';
-import type { MockResult } from '../types.js';
+import type { BuildMocksOptions, MockResult, QaOption } from '../types.js';
 
 /**
  * Wrap a mock graph (or an existing handler) in an `ApolloLink`, so an `ApolloClient` resolves
@@ -56,5 +57,308 @@ export function mockLink(
       }),
   );
 }
+
+/**
+ * A function that builds a graph from build options — usually `(options) => buildMocks(schema,
+ * { ...defaults, ...options })`. Passing one instead of a built graph is what lets a story
+ * parameter ask for a different `qa` or `count` and get a graph built for it.
+ */
+export type MockGraphFactory = (options: BuildMocksOptions) => MockResult;
+
+/** Anything `createMockClient` can draw operations from. */
+export type MockClientSource = MockResult | MockRequestHandler | MockGraphFactory;
+
+/** The client `createMockClient` returns, named without depending on Apollo's generic arity. */
+export type MockApolloClient = InstanceType<typeof ApolloClient>;
+
+/**
+ * Apollo's own constructor options, read off the installed major rather than imported by name —
+ * the option type has moved and changed shape between 3.x and 4.x.
+ */
+type ApolloClientArgs = ConstructorParameters<typeof ApolloClient>[0];
+
+export interface CreateMockClientOptions extends MockHandlerOptions {
+  /** Replace the per-call `InMemoryCache`. Supplying one opts out of the isolation below. */
+  cache?: ApolloClientArgs['cache'];
+  /** Replace the link entirely — for chaining the mock link behind an auth or error link. */
+  link?: ApolloLink;
+  /** Merged over the defaults below, per operation kind and then per key. */
+  defaultOptions?: ApolloClientArgs['defaultOptions'];
+  /** Anything else the `ApolloClient` constructor takes; the three options above win over it. */
+  clientOptions?: Partial<ApolloClientArgs>;
+}
+
+/**
+ * `no-cache` because the point of a mock client is to see what the mocks return: a normalized
+ * cache would answer the second story's query from the first story's rows, and an id collision
+ * across two graphs would merge them. `errorPolicy: 'all'` because an error state is a state a
+ * story wants to render, not a rejected promise nobody catches.
+ */
+const DEFAULT_CLIENT_DEFAULTS = {
+  watchQuery: { fetchPolicy: 'no-cache', errorPolicy: 'all' },
+  query: { fetchPolicy: 'no-cache', errorPolicy: 'all' },
+} as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function mergeDefaultOptions(
+  override: ApolloClientArgs['defaultOptions'],
+): ApolloClientArgs['defaultOptions'] {
+  const merged: Record<string, unknown> = { ...DEFAULT_CLIENT_DEFAULTS };
+  for (const [key, value] of Object.entries((override ?? {}) as Record<string, unknown>)) {
+    const previous = merged[key];
+    merged[key] = isRecord(previous) && isRecord(value) ? { ...previous, ...value } : value;
+  }
+  return merged as ApolloClientArgs['defaultOptions'];
+}
+
+/** A handler is a function too, so tell the two apart by the surface only a handler has. */
+function isHandler(source: MockClientSource): source is MockRequestHandler {
+  return typeof source === 'function' && 'calls' in source && 'reset' in source;
+}
+
+function isFactory(source: MockClientSource): source is MockGraphFactory {
+  return typeof source === 'function' && !isHandler(source);
+}
+
+/**
+ * A stable, order-independent key for a value, or `null` when the value contains something that
+ * cannot be compared structurally (a function, a symbol, a cycle). `null` means "do not cache"
+ * rather than "cache under a lossy key", because two overrides differing only in their predicate
+ * must not share a graph.
+ */
+function stableKey(value: unknown, seen: Set<object> = new Set()): string | null {
+  if (typeof value === 'function' || typeof value === 'symbol') return null;
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const parts: string[] = [];
+      for (const entry of value) {
+        const part = stableKey(entry, seen);
+        if (part === null) return null;
+        parts.push(part);
+      }
+      return `[${parts.join(',')}]`;
+    }
+    const record = value as Record<string, unknown>;
+    const parts: string[] = [];
+    for (const key of Object.keys(record).sort()) {
+      if (record[key] === undefined) continue;
+      const part = stableKey(record[key], seen);
+      if (part === null) return null;
+      parts.push(`${JSON.stringify(key)}:${part}`);
+    }
+    return `{${parts.join(',')}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/**
+ * Graphs built from a factory, keyed by the build config that produced them. Building a graph
+ * is the expensive part of a story render, and a storybook re-renders the same story constantly;
+ * without this, every keystroke in a control rebuilds every pool and reshuffles every row.
+ *
+ * Keyed by the factory itself (weakly, so an unmounted story file's graphs go with it), then by
+ * the stringified config, so two states of the same story share one graph and a story that asks
+ * for `qa: 'i18n'` gets its own.
+ */
+const graphCache = new WeakMap<MockGraphFactory, Map<string, MockResult>>();
+
+function buildGraph(factory: MockGraphFactory, options: BuildMocksOptions): MockResult {
+  const key = stableKey(options);
+  if (key === null) return factory(options);
+  let byConfig = graphCache.get(factory);
+  if (!byConfig) {
+    byConfig = new Map();
+    graphCache.set(factory, byConfig);
+  }
+  const cached = byConfig.get(key);
+  if (cached) return cached;
+  const built = factory(options);
+  byConfig.set(key, built);
+  return built;
+}
+
+/**
+ * Build an `ApolloClient` that answers every operation from a mock graph:
+ *
+ * ```ts
+ * const client = createMockClient(buildMocks(schema));
+ * render(<ApolloProvider client={client}>{story}</ApolloProvider>);
+ * ```
+ *
+ * Handler options (`delay`, `overrides`, `memoize`, `matchArguments`, …) are passed through to
+ * the link, so the common case needs no second call:
+ *
+ * ```ts
+ * createMockClient(mocks, { delay: 300, matchArguments: true });
+ * ```
+ *
+ * Each call gets its own `InMemoryCache` and `no-cache` fetch policies, so one story cannot
+ * leak rows into the next. Pass `cache`, `link` or `defaultOptions` to override any of that.
+ */
+export function createMockClient(
+  source: MockClientSource,
+  options: CreateMockClientOptions = {},
+): MockApolloClient {
+  const { cache, link, defaultOptions, clientOptions, ...handlerOptions } = options;
+  const graph = isFactory(source) ? buildGraph(source, {}) : source;
+  return new ApolloClient({
+    ...(clientOptions ?? {}),
+    cache: cache ?? new InMemoryCache(),
+    link: link ?? mockLink(graph, handlerOptions),
+    defaultOptions: mergeDefaultOptions(defaultOptions),
+  } as ApolloClientArgs);
+}
+
+/** The three states {@link mockScenarios} produces, as a story parameter would name them. */
+export type MockClientState = 'default' | 'loading' | 'errored';
+
+/** The long form of a story parameter: a state plus anything `createMockClient` accepts. */
+export interface MockClientParameter extends CreateMockClientOptions {
+  /** @default 'default' */
+  state?: MockClientState;
+  /** Narrow `loading` / `errored` to specific operations, leaving the rest resolving. */
+  target?: ScenarioTarget;
+  /** Rebuild the graph with these options. Needs a {@link MockGraphFactory} source. */
+  build?: BuildMocksOptions;
+  /** Shorthand for `build: { qa }`. Needs a {@link MockGraphFactory} source. */
+  qa?: QaOption;
+}
+
+/** What a story may set the parameter to. `false` means "no mock client for this story". */
+export type MockClientOption = boolean | MockClientState | MockClientParameter;
+
+function normalizeParameter(parameter: MockClientOption | undefined): MockClientParameter {
+  if (parameter === undefined || typeof parameter === 'boolean') return {};
+  if (typeof parameter === 'string') return { state: parameter };
+  return parameter;
+}
+
+function graphFor(source: MockClientSource, parameter: MockClientParameter): MockClientSource {
+  const wantsBuild = parameter.build !== undefined || parameter.qa !== undefined;
+  if (!isFactory(source)) {
+    if (wantsBuild) {
+      console.warn(
+        '[graphql-mocks] apollo: "build" and "qa" need a graph factory — pass (options) => buildMocks(schema, options) instead of an already-built graph. Ignoring them.',
+      );
+    }
+    return source;
+  }
+  const build = { ...parameter.build };
+  if (parameter.qa !== undefined) build.qa = parameter.qa;
+  return buildGraph(source, build);
+}
+
+/**
+ * Turn a story parameter into a client. `true` (or an absent parameter) is the default state;
+ * a string picks one of {@link mockScenarios}' three; an object carries the rest.
+ *
+ * ```ts
+ * resolveMockClient(factory, 'loading');
+ * resolveMockClient(factory, { state: 'errored', target: 'Users', qa: 'i18n' });
+ * ```
+ *
+ * `base` is the decorator-level configuration the parameter is layered over: plain options are
+ * replaced key by key, and `overrides` concatenate with the story's first, since first match
+ * wins and the story is the more specific of the two.
+ */
+export function resolveMockClient(
+  source: MockClientSource,
+  parameter: MockClientOption = true,
+  base: CreateMockClientOptions = {},
+): MockApolloClient {
+  const {
+    state = 'default',
+    target,
+    build: _build,
+    qa: _qa,
+    ...options
+  } = normalizeParameter(parameter);
+  const { cache, link, defaultOptions, clientOptions, ...handler } = { ...base, ...options };
+  const scenario = mockScenarios(
+    { ...handler, overrides: [...(options.overrides ?? []), ...(base.overrides ?? [])] },
+    target,
+  )[state];
+  return createMockClient(graphFor(source, normalizeParameter(parameter)), {
+    ...scenario,
+    cache,
+    link,
+    defaultOptions,
+    clientOptions,
+  });
+}
+
+/** The two pieces of a decorator's contract this module touches — no Storybook import needed. */
+export type StoryFnLike = (context?: unknown) => unknown;
+
+export interface StoryContextLike {
+  parameters?: Record<string, unknown>;
+}
+
+export interface GraphqlMocksDecoratorOptions extends CreateMockClientOptions {
+  /**
+   * Render the story with the client in scope. Renderer-specific, so it is yours to supply —
+   * this module stays free of React:
+   *
+   * ```ts
+   * wrap: (client, Story) => <ApolloProvider client={client}><Story /></ApolloProvider>
+   * ```
+   */
+  wrap: (client: MockApolloClient, story: StoryFnLike, context: StoryContextLike) => unknown;
+  /** Story parameter to read. @default 'graphqlMocks' */
+  parameterName?: string;
+}
+
+/**
+ * A Storybook decorator that resolves the `graphqlMocks` story parameter into a client:
+ *
+ * ```ts
+ * // .storybook/preview.tsx
+ * export const decorators = [
+ *   withGraphqlMocks((options) => buildMocks(schema, { count: 8, ...options }), {
+ *     wrap: (client, Story) => (
+ *       <ApolloProvider client={client}><Story /></ApolloProvider>
+ *     ),
+ *   }),
+ * ];
+ *
+ * // a story
+ * export const Loading = { parameters: { graphqlMocks: 'loading' } };
+ * export const Empty = { parameters: { graphqlMocks: { build: { count: 0 } } } };
+ * export const NoMocks = { parameters: { graphqlMocks: false } };
+ * ```
+ *
+ * A story with no parameter still gets the default client, since a global decorator is added to
+ * mock everything; `false` opts a single story back out.
+ *
+ * Clients are memoized per resolved parameter, so a re-render reuses the client it already has
+ * instead of remounting into a fresh cache and refetching on every keystroke.
+ */
+export function withGraphqlMocks(
+  source: MockClientSource,
+  options: GraphqlMocksDecoratorOptions,
+): (story: StoryFnLike, context?: StoryContextLike) => unknown {
+  const { wrap, parameterName = 'graphqlMocks', ...base } = options;
+  const clients = new Map<string, MockApolloClient>();
+
+  return (story, context = {}) => {
+    const parameter = context.parameters?.[parameterName] as MockClientOption | undefined;
+    if (parameter === false) return story(context);
+
+    const key = stableKey(parameter ?? true);
+    const cached = key === null ? undefined : clients.get(key);
+    const client = cached ?? resolveMockClient(source, parameter, base);
+    if (key !== null && cached === undefined) clients.set(key, client);
+    return wrap(client, story, context);
+  };
+}
+
+export type { ScenarioTarget } from '../mockScenarios.js';
 
 export type { MockHandlerOptions, MockRequestHandler } from '../requestHandler.js';
