@@ -33,6 +33,8 @@ export interface ResolvedOptions {
   nullChance: number;
   addTypename: boolean;
   stableIds: boolean;
+  /** Prepended to every stable id. Empty unless the caller (or `buildMatrix`) sets it. */
+  idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
   relations: RelationsConfig | undefined;
@@ -56,6 +58,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     nullChance: qaNullChance(qa) ?? options.nullChance ?? 0,
     addTypename: options.addTypename ?? true,
     stableIds: options.stableIds ?? false,
+    idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
     relations: options.relations,

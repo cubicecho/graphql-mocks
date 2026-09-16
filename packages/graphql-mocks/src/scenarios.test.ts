@@ -9,9 +9,9 @@ import type { Scenario } from './types.js';
 // fields because `faker.date.recent()` is wall-clock relative. Same helper as qaSets.test.ts.
 const CLOCK_RELATIVE = new Set(['createdAt', 'dueDate', 'publishedAt']);
 
-const scalarFields = (items: unknown[]) =>
+const scalarFields = (items: unknown[] | undefined) =>
   JSON.stringify(
-    (items as Record<string, unknown>[]).map((item) =>
+    ((items ?? []) as Record<string, unknown>[]).map((item) =>
       Object.fromEntries(
         Object.entries(item).filter(
           ([key, value]) => typeof value !== 'object' && !CLOCK_RELATIVE.has(key),

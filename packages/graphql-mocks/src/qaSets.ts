@@ -1,6 +1,5 @@
-import { Faker, base, en } from '@faker-js/faker';
 import type { GraphQLSchema } from 'graphql';
-import { buildMocks } from './mockSchema.js';
+import { type BuildMatrixOptions, buildMatrix } from './matrix.js';
 import { QA_PROFILES, QA_PROFILE_NAMES } from './qa.js';
 import type { BuildMocksOptions, MockResult, QaConfig, QaProfileName } from './types.js';
 
@@ -45,35 +44,33 @@ export interface BuildQaSetsOptions<
  * requested alongside it — drop one from `profiles` and the rest are unchanged. Sharing a
  * single instance (by passing `faker`) gives up that property, because every draw advances
  * the same stream.
+ *
+ * A thin wrapper over {@link buildMatrix}' QA axis — reach for that one when you also want
+ * a scenario axis.
  */
 export function buildQaSets<TTypes extends Record<string, unknown> = Record<string, unknown>>(
   schema: GraphQLSchema | string,
   options: BuildQaSetsOptions<NoInfer<TTypes>> = {},
 ): QaSet<TTypes>[] {
-  const { profiles = QA_PROFILE_NAMES, qa: sharedQa, faker, seed, ...rest } = options;
+  const { profiles = QA_PROFILE_NAMES, ...rest } = options;
 
-  return profiles.map((name) => {
-    const preset = QA_PROFILES[name];
-    if (!preset) {
+  for (const name of profiles) {
+    if (!QA_PROFILES[name]) {
       throw new RangeError(
         `[graphql-mocks] buildQaSets: unknown profile "${name}". Known profiles: ${QA_PROFILE_NAMES.join(', ')}`,
       );
     }
-    // The preset's dimensions win over the shared base, so `qa: { listSize: 500 }` tunes
-    // hugeLists without silently overriding what any preset is there to test.
-    const qa: QaConfig = { ...sharedQa, ...preset };
+  }
 
-    // A fresh instance per set keeps each one independently reproducible; the shared
-    // module-level faker would carry state from whichever sets ran before it.
-    const setFaker = faker ?? new Faker({ locale: [en, base] });
-    if (seed !== undefined) setFaker.seed(seed);
-
-    const mocks = buildMocks<TTypes>(schema, {
-      ...rest,
-      faker: setFaker,
-      qa,
-    } as BuildMocksOptions<NoInfer<TTypes>>);
-
-    return { name, qa, mocks };
-  });
+  // One preset per cell on the QA axis, with no scenario axis — so `idPrefix` stays empty
+  // and each set's output is exactly what a plain `buildMocks` with that preset produces.
+  return buildMatrix<TTypes>(schema, {
+    ...rest,
+    qaPresets: profiles,
+    idPrefix: '',
+  } as BuildMatrixOptions<NoInfer<TTypes>>).map((cell, index) => ({
+    name: profiles[index] as QaProfileName,
+    qa: cell.options.qa as QaConfig,
+    mocks: cell.mocks,
+  }));
 }

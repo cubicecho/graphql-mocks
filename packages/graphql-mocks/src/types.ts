@@ -279,6 +279,13 @@ export interface BuildMocksOptions<
    * @default false
    */
   stableIds?: boolean;
+  /**
+   * Prefix stable ids with this string, giving `<prefix>User-0` instead of `User-0`. Only
+   * meaningful with `stableIds`, and there only to keep ids from colliding across pools
+   * built in the same run — which is what {@link buildMatrix} uses it for.
+   * @default ''
+   */
+  idPrefix?: string;
 }
 
 /**

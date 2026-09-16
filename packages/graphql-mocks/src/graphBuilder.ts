@@ -308,7 +308,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   );
 
   // Phase 1: generate N instances per type with scalar/enum fields only
-  const { addTypename, stableIds } = resolved;
+  const { addTypename, stableIds, idPrefix } = resolved;
   const demand = relationDemand(schema, resolved.relations, resolved.resolveType);
   const pool: Record<string, Record<string, unknown>[]> = {};
   for (const objectType of objectTypes) {
@@ -325,7 +325,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
       const instance = mockTypeScalars(objectType, resolved, index);
       if (addTypename) instance.__typename = objectType.name;
       if (stableIds && !idOverridden && 'id' in instance) {
-        instance.id = `${objectType.name}-${index}`;
+        instance.id = `${idPrefix}${objectType.name}-${index}`;
       }
       return instance;
     });
