@@ -1,5 +1,12 @@
 import type { Faker } from '@faker-js/faker';
-import { type GraphQLSchema, isEnumType, isObjectType, isScalarType } from 'graphql';
+import {
+  type GraphQLSchema,
+  isEnumType,
+  isInterfaceType,
+  isObjectType,
+  isScalarType,
+  isUnionType,
+} from 'graphql';
 import { unwrapType } from './typeMocker.js';
 import type { RelationSpec, RelationsConfig } from './types.js';
 
@@ -168,4 +175,46 @@ export function validateRelations(
       }
     }
   }
+}
+
+/**
+ * How many instances of each type the `relations` config needs in the pool, since lists are
+ * drawn without replacement and so can never be longer than the pool they draw from.
+ *
+ * Only sized specs count: `'all'` takes whatever exists, `null` takes nothing, and a
+ * {@link RelationFn} chooses for itself. The result raises the *default* count, so an
+ * explicit `count` entry still wins — the same arrangement `lists: 'huge'` already uses.
+ */
+export function relationDemand(
+  schema: GraphQLSchema,
+  relations: RelationsConfig | undefined,
+  resolveType?: (abstractTypeName: string) => string,
+): Record<string, number> {
+  const demand: Record<string, number> = {};
+  if (relations === undefined) return demand;
+
+  for (const type of Object.values(schema.getTypeMap())) {
+    if (!isObjectType(type) || type.name.startsWith('__')) continue;
+
+    for (const [fieldName, field] of Object.entries(type.getFields())) {
+      const { namedType, isList } = unwrapType(field.type);
+      // A singular field needs one object, which the default count already covers.
+      if (!isList) continue;
+
+      const spec = resolveRelation(type.name, fieldName, relations);
+      const size = typeof spec === 'number' ? spec : isMap(spec) ? Number(spec.max) : 0;
+      if (!size) continue;
+
+      const targetName = isObjectType(namedType)
+        ? namedType.name
+        : (isInterfaceType(namedType) || isUnionType(namedType)) && resolveType
+          ? resolveType(namedType.name)
+          : undefined;
+      if (targetName === undefined) continue;
+
+      demand[targetName] = Math.max(demand[targetName] ?? 0, size);
+    }
+  }
+
+  return demand;
 }

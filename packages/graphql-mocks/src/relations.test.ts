@@ -287,3 +287,63 @@ describe('relations non-null policy', () => {
     warn.mockRestore();
   });
 });
+
+describe('relationDemand', () => {
+  it('grows the target pool to the size the relation asks for', () => {
+    const mocks = buildMocks(schema, { seed: 1, relations: { User: { todos: 20 } } });
+    expect((mocks.Todo as unknown[]).length).toBe(20);
+    for (const user of mocks.User as Record<string, unknown>[]) {
+      const todos = user.todos as Record<string, unknown>[];
+      expect(todos.length).toBe(20);
+      expect(new Set(todos).size).toBe(20);
+    }
+    // Only the type actually demanded grows; the rest keep the default count.
+    expect((mocks.Post as unknown[]).length).toBe(5);
+  });
+
+  it('defers to an explicit count, like the huge list profile does', () => {
+    const mocks = buildMocks(schema, { seed: 1, count: 2, relations: { User: { todos: 20 } } });
+    expect((mocks.Todo as unknown[]).length).toBe(2);
+  });
+
+  it('takes the largest demand across every field pointing at a type', () => {
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      relations: { User: { todos: { min: 1, max: 8 } }, _default: 3 },
+    });
+    expect((mocks.Todo as unknown[]).length).toBe(8);
+  });
+
+  it('leaves the pools alone for specs that size themselves', () => {
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      relations: { User: { todos: 'all', posts: ({ pool }) => pool } },
+    });
+    expect((mocks.Todo as unknown[]).length).toBe(5);
+    expect((mocks.Post as unknown[]).length).toBe(5);
+  });
+
+  it('clamps to an explicit count and warns once about the shortfall', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: { _default: 2, Todo: 5 },
+      relations: { User: { todos: 20 } },
+    });
+    for (const user of mocks.User as Record<string, unknown>[]) {
+      expect((user.todos as unknown[]).length).toBe(5);
+    }
+    const messages = warn.mock.calls.map(([m]) => m as string);
+    expect(messages.filter((m) => m.includes('"User.todos"'))).toEqual([
+      expect.stringContaining('asks for up to 20 but the "Todo" pool holds 5'),
+    ]);
+    warn.mockRestore();
+  });
+
+  it('stays quiet when a huge QA list outruns the pool, as it always has', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    buildMocks(schema, { seed: 1, count: 2, qa: 'hugeLists' });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

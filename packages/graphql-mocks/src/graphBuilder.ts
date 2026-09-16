@@ -17,7 +17,13 @@ import {
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import { qaListLength } from './qa.js';
-import { pickRelated, relationBounds, resolveRelation, validateRelations } from './relations.js';
+import {
+  pickRelated,
+  relationBounds,
+  relationDemand,
+  resolveRelation,
+  validateRelations,
+} from './relations.js';
 import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
@@ -88,6 +94,22 @@ function planRelationFields(
     // A catch-all can't empty a non-null singular field — `[]` satisfies `[Todo!]!`, but
     // `null` satisfies nothing. An explicit entry that tries already threw in validation.
     const bounds = plan.isRequired && !plan.isList && emptied ? SINGULAR_BOUNDS : plan.bounds;
+
+    // Asking for more than exists is silent otherwise: the draw is without replacement, so
+    // the list simply comes back short. `'all'` and functions size themselves, so they can't.
+    if (
+      plan.isList &&
+      plan.spec !== undefined &&
+      plan.spec !== 'all' &&
+      typeof plan.spec !== 'function' &&
+      targetPool !== undefined &&
+      bounds !== null &&
+      bounds.max > targetPool.length
+    ) {
+      console.warn(
+        `[graphql-mocks] relations: "${objectType.name}.${plan.fieldName}" asks for up to ${bounds.max} but the "${targetName}" pool holds ${targetPool.length} — raise count.${targetName} to get more`,
+      );
+    }
 
     // An empty pool nulls a non-null field just as surely, and that nulls the whole query.
     if (
@@ -212,11 +234,17 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
 
   // Phase 1: generate N instances per type with scalar/enum fields only
   const { addTypename, stableIds } = resolved;
+  const demand = relationDemand(schema, resolved.relations, resolved.resolveType);
   const pool: Record<string, Record<string, unknown>[]> = {};
   for (const objectType of objectTypes) {
     // `defaultCount` already accounts for a `huge` list profile needing pools at least as
-    // large as the target length, since lists are sampled without replacement.
-    const count = resolveCount(objectType.name, resolved.count, resolved.defaultCount);
+    // large as the target length, since lists are sampled without replacement; `demand` does
+    // the same for the sizes `relations` asks for. An explicit `count` still wins over both.
+    const count = resolveCount(
+      objectType.name,
+      resolved.count,
+      Math.max(resolved.defaultCount, demand[objectType.name] ?? 0),
+    );
     const idOverridden = resolved.overrides[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
       const instance = mockTypeScalars(objectType, resolved);
