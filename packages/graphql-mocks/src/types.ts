@@ -204,6 +204,20 @@ export interface BuildMocksOptions<
    */
   overrides?: OverridesConfig<TTypes>;
   /**
+   * Shape relationship fields: how many related objects each one gets, or exactly which ones.
+   * Applied after every pool exists, which is what `overrides` structurally cannot do.
+   *
+   * ```ts
+   * buildMocks(schema, { relations: { User: { todos: 0, posts: { min: 1, max: 2 } } } });
+   * buildMocks(schema, { relations: { Post: { author: ({ pool }) => pool[0] } } });
+   * ```
+   *
+   * Resolved most specific first — `[type][field]` → `[type]._default` → `_default` → the
+   * flat form. An `overrides` entry for the same field still wins; an explicit entry beats
+   * both `nullChance` and the QA `lists` profile, which are deliberately less specific.
+   */
+  relations?: RelationsConfig<TTypes>;
+  /**
    * Required when the schema has interface or union fields.
    * Return the concrete type name to use when mocking a field of that abstract type.
    */

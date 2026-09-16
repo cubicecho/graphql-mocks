@@ -197,7 +197,9 @@ describe('buildGraph', () => {
     const result = buildGraph(s, { faker, seed: 1, resolveType: () => 'NonExistent' });
     const foo = result.Foo?.[0] as Record<string, unknown>;
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('NonExistent'));
-    expect(foo.node).toBeUndefined();
+    // Null, not undefined: an empty pool resolves the same way for abstract and object
+    // fields, and `undefined` is not a value GraphQL can serialize.
+    expect(foo.node).toBeNull();
     warnSpy.mockRestore();
   });
 

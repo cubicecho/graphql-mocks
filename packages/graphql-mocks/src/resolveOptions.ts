@@ -1,7 +1,13 @@
 import type { Faker } from '@faker-js/faker';
 import { resolveFaker } from './helpers.js';
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
-import type { BuildMocksOptions, CountConfig, OverridesConfig, ScalarMocker } from './types.js';
+import type {
+  BuildMocksOptions,
+  CountConfig,
+  OverridesConfig,
+  RelationsConfig,
+  ScalarMocker,
+} from './types.js';
 
 /**
  * Every option folded into the single shape the generator actually consumes — defaults
@@ -28,6 +34,7 @@ export interface ResolvedOptions {
   stableIds: boolean;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
+  relations: RelationsConfig | undefined;
   resolveType: ((abstractTypeName: string) => string) | undefined;
   qa: ResolvedQa | undefined;
   /** Derived from `qa` once, rather than per instance. Undefined when QA mode is off. */
@@ -48,6 +55,7 @@ export function resolveOptions(options: BuildMocksOptions): ResolvedOptions {
     stableIds: options.stableIds ?? false,
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    relations: options.relations,
     resolveType: options.resolveType,
     qa,
     qaScalars: qa ? qaScalarMockers(qa) : undefined,

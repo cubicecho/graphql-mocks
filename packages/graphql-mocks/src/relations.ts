@@ -1,3 +1,4 @@
+import type { Faker } from '@faker-js/faker';
 import type { RelationSpec, RelationsConfig } from './types.js';
 
 /**
@@ -28,11 +29,12 @@ export function resolveRelation(
 
   const typeEntry = config[typeName];
   if (isMap(typeEntry)) {
-    const field = typeEntry[fieldName];
-    if (field !== undefined) return field as RelationSpec;
-    if (typeEntry._default !== undefined) return typeEntry._default as RelationSpec;
+    const fields = typeEntry as Record<string, RelationSpec | undefined>;
+    const field = fields[fieldName];
+    if (field !== undefined) return field;
+    if (fields._default !== undefined) return fields._default;
   }
-  return config._default as RelationSpec | undefined;
+  return config._default;
 }
 
 /**
@@ -51,4 +53,25 @@ export function relationBounds(
   if (spec === 'all') return { min: UNBOUNDED, max: UNBOUNDED };
   if (typeof spec === 'number') return { min: spec, max: spec };
   return spec;
+}
+
+/**
+ * Draw a field's related objects from the target pool, without replacement — the same object
+ * twice in one list would collapse to a single entry under Apollo cache normalization.
+ *
+ * Bounds wider than the pool clamp to it, so `'all'` (unbounded) takes everything.
+ */
+export function pickRelated(
+  pool: Record<string, unknown>[],
+  bounds: { min: number; max: number } | null,
+  isList: boolean,
+  faker: Faker,
+): unknown {
+  const empty = isList ? [] : null;
+  if (bounds === null || bounds.max === 0 || pool.length === 0) return empty;
+  if (!isList) return faker.helpers.arrayElement(pool);
+  return faker.helpers.arrayElements(pool, {
+    min: Math.min(bounds.min, pool.length),
+    max: Math.min(bounds.max, pool.length),
+  });
 }
