@@ -271,6 +271,33 @@ mocks.mockOperation(SearchUsersQuery, { dynamic: true, matchArguments: true });
 
 `transform: (data, variables) => data` post-processes whichever path runs, and `matchArguments` overrides the graph-wide setting for this operation only.
 
+### The shape that never runs
+
+Apollo invokes `result` only when **`result` itself** is a function. A function one level down, at `result.data`, is never called — the mock matches, the link resolves, and the cache is handed a function where the data should be. The component renders nothing, with no error and no warning:
+
+```ts
+{ request: { query: Doc }, result: { data: (vars) => ({ … }) } } // never invoked
+{ request: { query: Doc }, result: (vars) => ({ data: { … } }) } // what Apollo calls
+```
+
+`mockOperation(Doc, (vars) => data)` produces the second shape, so pass the resolver as the `data` argument rather than wrapping it — and if an envelope does slip through, `mockOperation` warns about it at construction time.
+
+### Validating mocks
+
+`validateMocks` checks hand-written mocks for that trap and the other shapes that fail quietly. Point it at one mock, an array, a `mockOperationVariants` trio, or a whole module of any of those:
+
+```ts
+import * as mocks from './mocks/index.js';
+import { assertValidMocks, validateMocks } from '@vantreeseba/graphql-mocks';
+
+it('every mock is well formed', () => assertValidMocks(mocks));
+
+const issues = validateMocks(mocks);
+// [{ path: 'mocks.userMock.result.data', operationName: 'User', message: 'result.data is a function, …' }]
+```
+
+It reports every problem rather than stopping at the first, so one run fixes a directory. Checks: `request.query` is a parsed document declaring an operation, `request.variables` is an object or a predicate, `error` is an `Error`, `delay`/`maxUsageCount` are numbers, the mock carries a `result` or an `error`, and the resolved `data` is a non-empty object with no functions anywhere inside it (the walk is cycle-safe, so pooled objects are fine). Pass `requireData: false` to allow empty payloads, or `probeVariables` to call a resolver-form `result` and validate what it returns.
+
 ## A transport for any operation
 
 `mocks.toRequestHandler()` answers **any** operation from the graph — no per-operation registration, so one handler covers a whole screen:

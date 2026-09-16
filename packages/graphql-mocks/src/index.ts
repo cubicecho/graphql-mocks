@@ -61,3 +61,5 @@ export { buildMatrix } from './matrix.js';
 export type { BuildMatrixOptions, MatrixCell, MatrixCellInfo } from './matrix.js';
 export { composeScenarios, defineScenarios } from './scenarios.js';
 export { resolveRelation } from './relations.js';
+export { assertValidMocks, validateMocks } from './validateMocks.js';
+export type { MockIssue, ValidateMocksOptions } from './validateMocks.js';
