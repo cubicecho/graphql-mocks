@@ -1,3 +1,17 @@
+# [3.2.0](https://github.com/cubicecho/graphql-mocks/compare/v3.1.0...v3.2.0) (2026-09-16)
+
+
+### Features
+
+* **apollo:** add createMockClient and a Storybook decorator ([8d878a9](https://github.com/cubicecho/graphql-mocks/commit/8d878a950f94861780e820d08defd708673d686c)), closes [#9](https://github.com/cubicecho/graphql-mocks/issues/9)
+* **graphql-mocks:** add a derive phase for fields computed from the object ([dd633bc](https://github.com/cubicecho/graphql-mocks/commit/dd633bcd10d3f419e87513eabcb22c08899b3da3)), closes [#13](https://github.com/cubicecho/graphql-mocks/issues/13)
+* **graphql-mocks:** apply arguments to the list inside a wrapper type ([de71d7b](https://github.com/cubicecho/graphql-mocks/commit/de71d7b362a7d618c5cedccdb503dd644cdbe108)), closes [#10](https://github.com/cubicecho/graphql-mocks/issues/10)
+* **graphql-mocks:** keep count scalars in step with QA list profiles ([ca223bd](https://github.com/cubicecho/graphql-mocks/commit/ca223bd390ec4cfe84dc18b8beb88da9a1be0357)), closes [#14](https://github.com/cubicecho/graphql-mocks/issues/14)
+* **graphql-mocks:** make cyclic mock data safe to traverse ([d22a9ac](https://github.com/cubicecho/graphql-mocks/commit/d22a9ac2f06aaa0570a017a8ecc508223e758506)), closes [#16](https://github.com/cubicecho/graphql-mocks/issues/16)
+* **graphql-mocks:** match arguments inside nested input objects ([8ec97ad](https://github.com/cubicecho/graphql-mocks/commit/8ec97adc93fcc757252c2b2675c3025f8011992a)), closes [#11](https://github.com/cubicecho/graphql-mocks/issues/11)
+* **graphql-mocks:** tell apart selections that differ only by an argument ([8bfc39b](https://github.com/cubicecho/graphql-mocks/commit/8bfc39b9233580fb250d922910db45ddd554e25c)), closes [#12](https://github.com/cubicecho/graphql-mocks/issues/12)
+* **graphql-mocks:** validate Apollo mock shapes that fail silently ([cfb44b8](https://github.com/cubicecho/graphql-mocks/commit/cfb44b83e4bc632994489b650e12fe758cab5662)), closes [#15](https://github.com/cubicecho/graphql-mocks/issues/15)
+
 # [3.1.0](https://github.com/cubicecho/graphql-mocks/compare/v3.0.0...v3.1.0) (2026-09-16)
 
 
