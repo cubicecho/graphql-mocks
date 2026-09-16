@@ -266,3 +266,47 @@ describe('buildGraph', () => {
     }
   });
 });
+
+describe('listSize', () => {
+  it('caps relationship list length at the configured maximum', () => {
+    const mocks = buildGraph(schema, { count: 30, listSize: { min: 2, max: 2 }, seed: 7 });
+    const users = mocks.User as Record<string, unknown>[];
+    for (const user of users) {
+      expect((user.todos as unknown[]).length).toBe(2);
+      expect((user.posts as unknown[]).length).toBe(2);
+    }
+  });
+
+  it('grows relationship lists past the previous hardcoded cap of 5', () => {
+    const mocks = buildGraph(schema, { count: 40, listSize: { min: 12, max: 12 }, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect((user?.todos as unknown[]).length).toBe(12);
+  });
+
+  it('is capped by the pool size, since items are drawn without replacement', () => {
+    const mocks = buildGraph(schema, { count: 3, listSize: { min: 10, max: 10 }, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect((user?.todos as unknown[]).length).toBe(3);
+  });
+
+  it('produces empty relationship lists when the max is zero', () => {
+    const mocks = buildGraph(schema, { listSize: 0, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect(user?.todos).toEqual([]);
+  });
+
+  it('leaves generated data unchanged when unset', () => {
+    // The pool graph is circular, so compare scalar fields and list lengths rather than
+    // serializing it.
+    const shape = (mocks: ReturnType<typeof buildGraph>) =>
+      (mocks.User as Record<string, unknown>[]).map((u) => ({
+        id: u.id,
+        name: u.name,
+        todos: (u.todos as unknown[]).length,
+        posts: (u.posts as unknown[]).length,
+      }));
+    expect(shape(buildGraph(schema, { seed: 99 }))).toEqual(
+      shape(buildGraph(schema, { seed: 99, listSize: { min: 1, max: 5 } })),
+    );
+  });
+});

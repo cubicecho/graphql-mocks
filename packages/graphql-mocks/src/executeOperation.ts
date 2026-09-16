@@ -17,6 +17,7 @@ import {
   isUnionType,
   typeFromAST,
 } from 'graphql';
+import { type ListSizeRange, resolveListSize } from './helpers.js';
 import { resolveScalarMocker } from './scalarMockers.js';
 import type { BuildMocksOptions } from './types.js';
 
@@ -49,6 +50,7 @@ function pickFromPool(
   pool: Pool,
   faker: Faker,
   options: BuildMocksOptions,
+  listSize: ListSizeRange,
 ): unknown {
   const { named, isList } = unwrapOutput(returnType);
 
@@ -60,14 +62,18 @@ function pickFromPool(
       const items = pool[faker.helpers.arrayElement(concrete).name];
       return items ? faker.helpers.arrayElement(items) : null;
     };
-    if (isList) return Array.from({ length: faker.number.int({ min: 1, max: 5 }) }, pickOne);
+    if (isList) return Array.from({ length: faker.number.int(listSize) }, pickOne);
     return pickOne();
   }
 
   const items = pool[named.name];
   if (items && items.length > 0) {
     if (isList) {
-      return faker.helpers.arrayElements(items, { min: 1, max: Math.min(5, items.length) });
+      if (listSize.max === 0) return [];
+      return faker.helpers.arrayElements(items, {
+        min: Math.min(listSize.min, items.length),
+        max: Math.min(listSize.max, items.length),
+      });
     }
     return faker.helpers.arrayElement(items);
   }
@@ -137,6 +143,8 @@ export function resolveOperationData(
   document: DocumentNode,
   variables?: Record<string, unknown>,
 ): unknown {
+  const listSize = resolveListSize(options.listSize);
+
   const rootTypeNames = new Set(
     [schema.getQueryType(), schema.getMutationType(), schema.getSubscriptionType()]
       .filter((t): t is NonNullable<typeof t> => t != null)
@@ -151,7 +159,7 @@ export function resolveOperationData(
     // Root fields draw from the pool; nested fields read the wired references via the default.
     fieldResolver: (source, args, context, info) =>
       rootTypeNames.has(info.parentType.name)
-        ? pickFromPool(schema, info.returnType, pool, faker, options)
+        ? pickFromPool(schema, info.returnType, pool, faker, options, listSize)
         : defaultFieldResolver(source, args, context, info),
     // Abstract types (interface/union) resolve via the __typename carried by every mock.
     typeResolver: (value) =>

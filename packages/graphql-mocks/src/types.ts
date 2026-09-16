@@ -4,6 +4,11 @@ import type { DocumentNode } from 'graphql';
 import type { MockOperationOptions, MockOperationVariants, MockedResponse } from './apolloMocks.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
+
+/**
+ * Size of generated list fields: a bare number for an exact length, or an inclusive range.
+ */
+export type ListSizeConfig = number | { min: number; max: number };
 /**
  * Per-field override. Receives the same (seeded) faker instance the generator uses, so
  * overrides stay deterministic under `seed` without importing a separate faker.
@@ -57,6 +62,14 @@ export interface BuildMocksOptions<
    * @default 0
    */
   nullChance?: number;
+  /**
+   * Size of generated list fields — both wired relationship lists and root list fields
+   * resolved by `dataForOperation`. Raise it when a query pages through more than a handful
+   * of items; the pool must also be large enough (see `count`), since lists are sampled
+   * without replacement.
+   * @default { min: 1, max: 5 }
+   */
+  listSize?: ListSizeConfig;
   /**
    * Custom scalar mockers. Merged over the built-in defaults; user wins on conflicts.
    * Key is the scalar name as it appears in the schema.

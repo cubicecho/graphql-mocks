@@ -15,7 +15,13 @@ import {
   variablesForData,
 } from './apolloMocks.js';
 import { resolveOperationData } from './executeOperation.js';
-import { OPERATION_TYPE_NAMES, resolveCount, resolveFaker } from './helpers.js';
+import {
+  type ListSizeRange,
+  OPERATION_TYPE_NAMES,
+  resolveCount,
+  resolveFaker,
+  resolveListSize,
+} from './helpers.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult } from './types.js';
 
@@ -24,12 +30,15 @@ function pickRandom<T>(arr: T[], faker: Faker): T | undefined {
   return arr.length === 0 ? undefined : faker.helpers.arrayElement(arr);
 }
 
-/** Pick a random subset of an array (1 to min(5, length) items). */
-function pickSubset<T>(arr: T[], faker: Faker): T[] {
-  if (arr.length === 0) return [];
+/**
+ * Pick a random subset of an array, without replacement. The size comes from `listSize`
+ * (default 1–5) and is capped by the pool, since items are drawn without replacement.
+ */
+function pickSubset<T>(arr: T[], faker: Faker, size: ListSizeRange): T[] {
+  if (arr.length === 0 || size.max === 0) return [];
   return faker.helpers.arrayElements(arr, {
-    min: 1,
-    max: Math.min(5, arr.length),
+    min: Math.min(size.min, arr.length),
+    max: Math.min(size.max, arr.length),
   });
 }
 
@@ -95,6 +104,7 @@ function createMockResult(
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const faker = resolveFaker(options);
+  const listSize = resolveListSize(options.listSize);
 
   // Collect all non-operation, non-builtin object types
   const typeMap = schema.getTypeMap();
@@ -149,7 +159,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
             continue;
           }
           instance[fieldName] = isList
-            ? pickSubset(relatedPool, faker)
+            ? pickSubset(relatedPool, faker, listSize)
             : pickRandom(relatedPool, faker);
           continue;
         }
@@ -170,7 +180,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           }
           const concretePool = pool[concreteName] ?? [];
           instance[fieldName] = isList
-            ? pickSubset(concretePool, faker)
+            ? pickSubset(concretePool, faker, listSize)
             : pickRandom(concretePool, faker);
         }
       }
