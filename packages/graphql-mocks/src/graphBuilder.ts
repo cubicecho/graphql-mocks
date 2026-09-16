@@ -17,7 +17,7 @@ import {
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import { qaListLength } from './qa.js';
-import { pickRelated, relationBounds, resolveRelation } from './relations.js';
+import { pickRelated, relationBounds, resolveRelation, validateRelations } from './relations.js';
 import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
@@ -41,6 +41,32 @@ interface FieldPlan {
   bounds: { min: number; max: number } | null;
   /** The pool to draw from, or undefined when the field can only ever be null. */
   targetPool: Record<string, unknown>[] | undefined;
+  /** Set once a {@link RelationFn} has been warned about, to keep warnings one per site. */
+  fnWarned?: boolean;
+}
+
+/**
+ * Keep a {@link RelationFn}'s return value executable. A function can't be checked ahead of
+ * time the way a literal spec can, so a non-null field it empties is repaired here — the
+ * engine never emits a graph that would null a whole query at execution time.
+ */
+function coerceFnValue(
+  value: unknown,
+  plan: FieldPlan,
+  pool: Record<string, unknown>[],
+  faker: Faker,
+  site: string,
+): unknown {
+  if (plan.isList) return value === undefined || (value === null && plan.isRequired) ? [] : value;
+  if (value != null || !plan.isRequired || pool.length === 0) return value;
+
+  if (!plan.fnWarned) {
+    plan.fnWarned = true;
+    console.warn(
+      `[graphql-mocks] relations: the function for "${site}" returned nothing for a non-null field — using a pooled object instead`,
+    );
+  }
+  return pickRelated(pool, SINGULAR_BOUNDS, false, faker);
 }
 
 /** Plan every non-scalar field of `objectType`, resolving abstract types to a concrete pool. */
@@ -50,6 +76,33 @@ function planRelationFields(
   resolved: ResolvedOptions,
 ): FieldPlan[] {
   const plans: FieldPlan[] = [];
+  const overrides = resolved.overrides[objectType.name] ?? {};
+
+  /** Finish a plan against the pool it draws from, warning once per site about the result. */
+  const commit = (
+    plan: Omit<FieldPlan, 'targetPool'>,
+    targetPool: Record<string, unknown>[] | undefined,
+    targetName: string,
+  ) => {
+    const emptied = plan.bounds === null || plan.bounds.max === 0;
+    // A catch-all can't empty a non-null singular field — `[]` satisfies `[Todo!]!`, but
+    // `null` satisfies nothing. An explicit entry that tries already threw in validation.
+    const bounds = plan.isRequired && !plan.isList && emptied ? SINGULAR_BOUNDS : plan.bounds;
+
+    // An empty pool nulls a non-null field just as surely, and that nulls the whole query.
+    if (
+      plan.isRequired &&
+      !plan.isList &&
+      targetPool?.length === 0 &&
+      overrides[plan.fieldName] === undefined
+    ) {
+      console.warn(
+        `[graphql-mocks] Field "${objectType.name}.${plan.fieldName}" is non-null but the "${targetName}" pool is empty — the field will be null, which nulls any query selecting it`,
+      );
+    }
+
+    plans.push({ ...plan, bounds, targetPool });
+  };
 
   for (const [fieldName, field] of Object.entries(objectType.getFields())) {
     const { namedType, isRequired, isList } = unwrapType(field.type);
@@ -61,7 +114,7 @@ function planRelationFields(
     const plan = { fieldName, isRequired, isList, spec, bounds: relationBounds(spec, fallback) };
 
     if (isObjectType(namedType)) {
-      plans.push({ ...plan, targetPool: pool[namedType.name] ?? [] });
+      commit(plan, pool[namedType.name] ?? [], namedType.name);
       continue;
     }
 
@@ -70,7 +123,7 @@ function planRelationFields(
         console.warn(
           `[graphql-mocks] Field "${objectType.name}.${fieldName}" returns abstract type "${namedType.name}" — provide resolveType option to mock it`,
         );
-        plans.push({ ...plan, targetPool: undefined });
+        commit(plan, undefined, namedType.name);
         continue;
       }
       const concreteName = resolved.resolveType(namedType.name);
@@ -79,7 +132,7 @@ function planRelationFields(
           `[graphql-mocks] resolveType returned unknown type "${concreteName}" for "${namedType.name}" — field will be null/empty`,
         );
       }
-      plans.push({ ...plan, targetPool: pool[concreteName] ?? [] });
+      commit(plan, pool[concreteName] ?? [], concreteName);
     }
   }
 
@@ -147,6 +200,7 @@ function createMockResult(
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = resolveOptions(options);
+  validateRelations(schema, resolved.relations);
   const { faker, qa, nullChance } = resolved;
 
   // Collect all non-operation, non-builtin object types
@@ -204,18 +258,22 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           continue;
         }
 
-        instance[fieldName] =
-          typeof spec === 'function'
-            ? spec({
-                pool: targetPool,
-                faker,
-                index,
-                instance,
-                typeName: objectType.name,
-                fieldName,
-                isList,
-              })
-            : pickRelated(targetPool, plan.bounds, isList, faker);
+        if (typeof spec !== 'function') {
+          instance[fieldName] = pickRelated(targetPool, plan.bounds, isList, faker);
+          continue;
+        }
+
+        const value = spec({
+          pool: targetPool,
+          faker,
+          index,
+          instance,
+          typeName: objectType.name,
+          fieldName,
+          isList,
+        });
+        const site = `${objectType.name}.${fieldName}`;
+        instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }
   }

@@ -1,5 +1,5 @@
-import { buildSchema } from 'graphql';
-import { describe, expect, it } from 'vitest';
+import { buildSchema, parse } from 'graphql';
+import { describe, expect, it, vi } from 'vitest';
 import { buildMocks } from './mockSchema.js';
 import { UNBOUNDED, relationBounds, resolveRelation } from './relations.js';
 import { schema } from './test/schema.js';
@@ -188,5 +188,102 @@ describe('buildMocks relations', () => {
     )) {
       expect(user.todos).toEqual([]);
     }
+  });
+});
+
+describe('validateRelations', () => {
+  const build = (relations: RelationsConfig) => () =>
+    buildMocks(schema, { seed: 1, count: 2, relations });
+
+  it('rejects an entry for a type the schema does not have', () => {
+    expect(build({ Nope: { todos: 1 } })).toThrow(TypeError);
+    expect(build({ Nope: { todos: 1 } })).toThrow(/unknown type "Nope"/);
+  });
+
+  it('rejects a field the type does not have', () => {
+    expect(build({ User: { nope: 1 } })).toThrow(/unknown field "User.nope"/);
+  });
+
+  it('rejects a spec on a scalar or enum field', () => {
+    expect(build({ User: { name: 1 } })).toThrow(/"User.name" is a String field/);
+    expect(build({ Todo: { priority: 1 } })).toThrow(/"Todo.priority" is a Priority field/);
+  });
+
+  it('rejects emptying a non-null singular field', () => {
+    expect(build({ Todo: { user: null } })).toThrow(/"Todo.user" is non-null \(User!\)/);
+    expect(build({ Todo: { user: 0 } })).toThrow(/cannot be emptied/);
+    expect(build({ Todo: { user: { min: 0, max: 0 } } })).toThrow(/cannot be emptied/);
+  });
+
+  it('allows emptying a non-null list, since [] satisfies it', () => {
+    const mocks = buildMocks(schema, { seed: 1, count: 2, relations: { User: { todos: null } } });
+    expect((mocks.User as Record<string, unknown>[])[0]?.todos).toEqual([]);
+  });
+
+  it('rejects sizes that are negative, fractional or inverted', () => {
+    expect(build({ User: { todos: -1 } })).toThrow(RangeError);
+    expect(build({ User: { todos: 1.5 } })).toThrow(/non-negative integer/);
+    expect(build({ User: { todos: { min: 3, max: 1 } } })).toThrow(/min 3 greater than max 1/);
+    expect(build({ _default: -2 })).toThrow(/"_default" must be a non-negative integer/);
+    expect(build({ User: { _default: -2 } })).toThrow(/"User._default"/);
+  });
+
+  it('rejects a bare spec where a field map belongs', () => {
+    expect(build({ User: 3 } as never)).toThrow(/expected a field map for "User"/);
+  });
+
+  it('ignores the flat form, which has no keys to check', () => {
+    expect(build(null)).not.toThrow();
+  });
+});
+
+describe('relations non-null policy', () => {
+  it('populates a non-null singular field a catch-all tried to empty', () => {
+    const mocks = buildMocks(schema, { seed: 1, count: 2, relations: 0 });
+    for (const todo of mocks.Todo as Record<string, unknown>[]) {
+      expect(todo.user).toMatchObject({ __typename: 'User' });
+    }
+  });
+
+  it('keeps a query executable when relations empty the graph', () => {
+    const mocks = buildMocks(schema, { seed: 1, count: 2, relations: 0 });
+    const data = mocks.dataForOperation(parse('{ todos { id user { name } } }')) as {
+      todos: { user: { name: string } | null }[];
+    };
+    expect(data.todos.length).toBeGreaterThan(0);
+    for (const todo of data.todos) expect(todo.user?.name).toEqual(expect.any(String));
+  });
+
+  it('repairs a function that empties a non-null field, warning once per site', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: 3,
+      relations: { Todo: { user: () => null } },
+    });
+    for (const todo of mocks.Todo as Record<string, unknown>[]) {
+      expect(todo.user).toMatchObject({ __typename: 'User' });
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"Todo.user" returned nothing'));
+    warn.mockRestore();
+  });
+
+  it('reads an empty list from a function as an empty list, not a repair', () => {
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: 2,
+      relations: { User: { todos: () => undefined } },
+    });
+    expect((mocks.User as Record<string, unknown>[])[0]?.todos).toEqual([]);
+  });
+
+  it('warns once when an empty pool leaves a non-null field null', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    buildMocks(schema, { seed: 1, count: { _default: 2, User: 0 } });
+    const messages = warn.mock.calls.map(([m]) => m as string);
+    expect(messages).toContainEqual(expect.stringContaining('"Todo.user" is non-null'));
+    expect(messages.filter((m) => m.includes('"Todo.user"'))).toHaveLength(1);
+    warn.mockRestore();
   });
 });

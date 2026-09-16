@@ -1,4 +1,6 @@
 import type { Faker } from '@faker-js/faker';
+import { type GraphQLSchema, isEnumType, isObjectType, isScalarType } from 'graphql';
+import { unwrapType } from './typeMocker.js';
 import type { RelationSpec, RelationsConfig } from './types.js';
 
 /**
@@ -74,4 +76,96 @@ export function pickRelated(
     min: Math.min(bounds.min, pool.length),
     max: Math.min(bounds.max, pool.length),
   });
+}
+
+/** A spec that asks for nothing at all. Functions are dynamic, so they're never "empty" here. */
+function isEmptySpec(spec: RelationSpec | undefined): boolean {
+  if (spec === null || spec === 0) return true;
+  return typeof spec === 'object' && spec.max === 0;
+}
+
+/** Sizes must be whole, non-negative, and ordered; anything else is a caller mistake. */
+function validateSize(spec: RelationSpec | undefined, site: string): void {
+  const sizes =
+    typeof spec === 'number'
+      ? [spec]
+      : typeof spec === 'object' && spec !== null
+        ? [spec.min, spec.max]
+        : [];
+  for (const size of sizes) {
+    if (!Number.isInteger(size) || size < 0) {
+      throw new RangeError(
+        `[graphql-mocks] relations: "${site}" must be a non-negative integer, got ${size}`,
+      );
+    }
+  }
+  if (typeof spec === 'object' && spec !== null && spec.min > spec.max) {
+    throw new RangeError(
+      `[graphql-mocks] relations: "${site}" has min ${spec.min} greater than max ${spec.max}`,
+    );
+  }
+}
+
+/**
+ * Check a `relations` config against the schema before anything is generated.
+ *
+ * Only the keys actually written are checked, so this is eager validation of a caller
+ * argument — a typo or an impossible size throws rather than silently doing nothing. The
+ * catch-all forms (`_default`, the flat form) are deliberately *not* checked field by field:
+ * they are meant to sweep over a schema, and a field they cannot legally empty is simply
+ * populated as usual.
+ */
+export function validateRelations(
+  schema: GraphQLSchema,
+  relations: RelationsConfig | undefined,
+): void {
+  if (relations === undefined || !isMap(relations)) return;
+
+  for (const [typeName, entry] of Object.entries(relations)) {
+    if (typeName === '_default') {
+      validateSize(entry as RelationSpec, '_default');
+      continue;
+    }
+    if (typeName === '_reciprocal') continue;
+
+    const type = schema.getType(typeName);
+    if (!isObjectType(type)) {
+      throw new TypeError(
+        `[graphql-mocks] relations: unknown type "${typeName}" — no object type by that name in the schema`,
+      );
+    }
+    if (!isMap(entry)) {
+      throw new TypeError(
+        `[graphql-mocks] relations: expected a field map for "${typeName}", got ${JSON.stringify(entry)} — write a catch-all as "${typeName}: { _default: … }"`,
+      );
+    }
+
+    const fields = type.getFields();
+    for (const [fieldName, fieldSpec] of Object.entries(entry as Record<string, RelationSpec>)) {
+      const site = `${typeName}.${fieldName}`;
+      if (fieldName === '_default') {
+        validateSize(fieldSpec, `${typeName}._default`);
+        continue;
+      }
+
+      const field = fields[fieldName];
+      if (!field) {
+        throw new TypeError(`[graphql-mocks] relations: unknown field "${site}"`);
+      }
+      const { namedType, isRequired, isList } = unwrapType(field.type);
+      if (isScalarType(namedType) || isEnumType(namedType)) {
+        throw new TypeError(
+          `[graphql-mocks] relations: "${site}" is a ${namedType.name} field — relations only shapes relationships, use overrides for scalar values`,
+        );
+      }
+      validateSize(fieldSpec, site);
+      // An empty list still satisfies `[Todo!]!`; an empty singular field does not, and would
+      // null the whole query at execution time.
+      if (isRequired && !isList && isEmptySpec(fieldSpec)) {
+        throw new TypeError(
+          `[graphql-mocks] relations: "${site}" is non-null (${field.type}) and cannot be emptied — make it nullable in the schema, or drop the entry`,
+        );
+      }
+    }
+  }
 }
