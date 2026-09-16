@@ -75,7 +75,15 @@ const mocks = buildMocks(schema, {
 });
 ```
 
-Override functions are passed the generator's faker instance, so they stay deterministic under `seed` without importing a separate faker.
+Override functions are passed the generator's faker instance, so they stay deterministic under `seed` without importing a separate faker, plus the site they're firing at — `{ index, typeName, fieldName }`, where `index` is the instance's position in its own pool (the same number `stableIds` uses). That makes per-instance cohorts a one-liner:
+
+```ts
+const mocks = buildMocks(schema, {
+  overrides: {
+    User: { loginCount: (faker, { index }) => (index === 0 ? 0 : faker.number.int(500)) },
+  },
+});
+```
 
 ### `__typename` and stable ids
 
@@ -178,7 +186,7 @@ state. The `qa` option swaps the generators for deliberately out-of-norm ones, s
 `buildMocks` call your story already makes can produce the data that breaks it.
 
 ```ts
-// a named profile
+// a named preset
 const mocks = buildMocks(schema, { seed: 42, qa: 'longText' });
 
 // or tune the dimensions yourself
@@ -187,9 +195,9 @@ const mocks = buildMocks(schema, {
 });
 ```
 
-### Profiles
+### Presets
 
-`buildQaSets` generates one mock pool per profile — the shape Storybook and `MockedProvider`
+`buildQaSets` generates one mock pool per preset — the shape Storybook and `MockedProvider`
 want, one variant per row:
 
 ```ts
@@ -202,7 +210,7 @@ const sets = buildQaSets(schema, { seed: 42 });
 const sets = buildQaSets(schema, { seed: 42, profiles: ['emptyText', 'hugeLists'] });
 ```
 
-| Profile | Config | What it stresses |
+| Preset | Config | What it stresses |
 |---------|--------|------------------|
 | `emptyText` | `{ text: 'empty' }` | Empty strings — labels, headings, alt text |
 | `whitespaceText` | `{ text: 'whitespace' }` | Spaces, tabs, newlines, non-breaking spaces |
@@ -234,8 +242,8 @@ export const QaVariants = sets.map((set) => ({
 ```
 
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
-identically no matter which other profiles ran alongside it — when one variant breaks, rerunning
-just that profile gives you the same data back.
+identically no matter which other presets ran alongside it — when one variant breaks, rerunning
+just that preset gives you the same data back.
 
 ### Notes
 
@@ -249,7 +257,129 @@ just that profile gives you the same data back.
 - `lists: 'huge'` raises the default `count` to `listSize` (100), because relationship lists are
   sampled from the pools without replacement. An explicit `count` still wins, which caps how long
   those lists can get.
-- `qa: false` disables QA, handy when the profile comes from a variable.
+- `qa: false` disables QA, handy when the preset comes from a variable.
+- Pair it with a [scenario](#scenarios) to vary the state as well as the kind of data;
+  `buildMatrix` crosses the two axes for you.
+
+## Scenarios
+
+QA mode varies the *kind* of data. Scenarios vary the *state*: a user who just signed up and has
+nothing, a power user with 200 todos, an empty workspace. That's about amounts and about which
+things are connected to which — so alongside `count` and `overrides`, there's `relations`.
+
+### `relations`
+
+`relations` shapes relationship fields after every pool exists, which is what `overrides`
+structurally cannot do (overrides run before the other pools are built).
+
+```ts
+const mocks = buildMocks(schema, {
+  relations: {
+    User: { todos: 0, posts: { min: 1, max: 2 } },  // exact size, or a range
+    Post: { comments: 'all', author: ({ pool }) => pool[0] },
+    Query: { users: 3 },                            // root fields too
+    _default: { min: 1, max: 5 },                   // fallback for everything else
+  },
+});
+```
+
+A spec is a number, a `{ min, max }` range, `null` (empty the field), `'all'` (the whole target
+pool), or a function that picks the value outright:
+
+```ts
+relations: { User: { todos: ({ pool, index }) => pool.filter((t) => t.ownerIndex === index) } }
+```
+
+The function receives `{ pool, faker, index, instance, typeName, fieldName, isList }`, where
+`pool` is the *target* type's pool and `instance` is the owner as built so far.
+
+Lookup goes most specific first: `[type][field]` → `[type]._default` → `_default` → the flat
+top-level form (`relations: 0` empties every relationship in the graph). **Ranges live under a
+key; a bare object is always a map** — so a top-level range is written `_default: { min, max }`.
+
+Notes:
+
+- An explicit spec beats both `nullChance` and the QA `lists` profile — the per-field lever is
+  the more specific one. An `overrides` entry for the same field still wins over `relations`.
+- The pools grow to meet demand: `{ User: { todos: 20 } }` mocks at least 20 todos, since lists
+  are sampled without replacement. An explicit `count` still wins, and caps the list.
+- Config errors throw rather than producing a broken graph: an unknown type or field, a spec on
+  a scalar field, or emptying a non-null singular field (`Todo: { user: null }` against
+  `user: User!`) is a `TypeError`; a negative or non-integer size is a `RangeError`. A catch-all
+  that *would* empty a non-null singular field is coerced back to one instead, so `relations: 0`
+  means "as empty as the schema allows" and never yields an unexecutable graph.
+- Wiring is one-directional by default: `user.todos[0].user` is some other user. Set
+  `relations: { _reciprocal: true }` to have each reference written back into its inverse field
+  where one exists unambiguously. It's lossy in one direction — a todo in two users' lists can
+  only point at one owner, and the last write wins.
+
+### Named scenarios
+
+A scenario is a named partial `buildMocks` config. `defineScenarios` is an identity function that
+keeps the literal keys; `satisfies ScenarioMap<SchemaTypeMap>` adds schema-checked type and field
+names.
+
+```ts
+import { buildMocks, defineScenarios } from '@vantreeseba/graphql-mocks';
+
+export const scenarios = defineScenarios({
+  newUser: {
+    description: 'signed up, has done nothing yet',
+    count: { User: 1 },
+    relations: { User: { todos: null, posts: null } },
+    overrides: { User: { loginCount: () => 0 } },
+  },
+  powerUser: {
+    relations: { User: { todos: 200, posts: { min: 20, max: 40 } } },
+  },
+});
+
+const mocks = buildMocks(schema, { scenario: scenarios.newUser, seed: 42 });
+```
+
+`scenario` also takes an array, applied left to right with the explicit options merged last:
+
+```ts
+buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], count: 3, seed: 42 });
+```
+
+`composeScenarios(a, b)` does the same fold eagerly and hands back an ordinary scenario, so it can
+be composed further. Maps merge key by key — `count` per type, `overrides` and `relations` per
+type then per field, `scalars` by scalar name, `qa` per dimension — and everything else is
+last-one-wins. `faker` and `seed` are build-level only; reproducibility stays the caller's.
+
+One precedence wrinkle: a `scalars` entry always outranks the QA generator for that scalar,
+whichever layer each came from. A later `qa` layer therefore can't reach a scalar an earlier
+layer pinned — the merge warns when that happens rather than silently doing the surprising thing.
+
+### `buildMatrix`
+
+Cross the scenarios with the QA presets and get one flat array of cells — one story, one test
+case, one row each:
+
+```ts
+import { buildMatrix } from '@vantreeseba/graphql-mocks';
+
+const cells = buildMatrix(schema, {
+  scenarios,
+  qaPresets: [false, 'longText', 'hugeLists'],
+  seed: 42,
+});
+// [{ name: 'newUser × noQa', scenario: 'newUser', qa: 'noQa', options, mocks }, ...]
+
+export const Variants = cells.map((cell) => ({
+  name: cell.name,
+  parameters: { apolloClient: { mocks: [cell.mocks.mockOperation(UsersQuery)] } },
+}));
+```
+
+Either axis may be omitted; `qaPresets` also takes a map (`{ baseline: false, huge: { lists:
+'huge' } }`) when you want your own cell names. Each cell gets its own faker seeded from `seed`,
+so a cell reproduces identically no matter which other cells were requested — `seedPerCell: true`
+opts out when you'd rather the cells differ. With `stableIds`, each cell's ids are prefixed with a
+slug of its name so pools from different cells don't collide; set `idPrefix` yourself to override.
+
+`buildQaSets` is the QA-only shorthand for the same engine.
 
 ## Typed pools
 
@@ -347,8 +477,11 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `seed` | `number` | — | Seed faker for deterministic output |
 | `nullChance` | `number` | `0` | Probability (0–1) nullable fields are `null` |
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
-| `overrides` | `Record<type, Record<field, (faker) => unknown>>` | — | Per-field replacement functions (receive the seeded faker). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
+| `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
+| `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
+| `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
+| `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |

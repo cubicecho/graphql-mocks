@@ -12,7 +12,7 @@ Key facts:
 ## Documentation
 
 - [Monorepo overview](https://github.com/vantreeseba/graphql-mocks/blob/main/README.md): Packages table and development workflow.
-- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, resolveType, addTypename, stableIds, qa), QA mode, typed pools, and helpers.
+- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, relations, scenario, resolveType, addTypename, stableIds, idPrefix, qa), QA mode, scenarios, typed pools, and helpers.
 - [Codegen plugin: @vantreeseba/graphql-mocks-codegen](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks-codegen/README.md): generating a `SchemaTypeMap`, plugin configuration (`typeMapName`, `typesImportPath`, `typesNamespace`), and generated output.
 - [AGENTS.md](https://github.com/vantreeseba/graphql-mocks/blob/main/AGENTS.md): Project structure, stack, conventions, and contributor guidance.
 
@@ -24,7 +24,10 @@ Key facts:
 - `MockResult.dataForOperation(document, variables?)`: Execute a query/mutation against the graph and return data shaped to the selection set (lists, fragments, and interface/union fields supported). Return type inferred from a `TypedDocumentNode`.
 - `mockOperation(query, data, options?)` / `mockOperationVariants(...)`: Build Apollo `MockedProvider` `MockedResponse` entries from supplied result data (`options`: `variables`, `delay`, `error`, `maxUsageCount`).
 - `MockResult.mockOperation(query, options?)` / `MockResult.mockOperationVariants(...)`: Same, but resolve the result data from the `MockResult` graph (via `dataForOperation`) so the query's selection set selects the mocks — no data argument needed.
-- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `resolveType`, `addTypename`, `stableIds`, `qa`.
+- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `relations`, `scenario`, `resolveType`, `addTypename`, `stableIds`, `idPrefix`, `qa`.
+- `relations` option (`RelationsConfig`): shapes relationship fields after every pool exists — a number, a `{ min, max }` range, `null` (empty), `'all'` (the whole target pool), or `(ctx) => value` picking the related objects from `ctx.pool`. Resolved `[type][field]` → `[type]._default` → `_default` → the flat form, and it reaches root fields through the operation type (`{ Query: { users: 3 } }`). Beats `nullChance` and the QA `lists` profile; `overrides` still beats it. Pools grow to meet demand. Config errors throw (`TypeError` for an unknown/ineligible field or an emptied non-null singular field, `RangeError` for a bad size). `{ _reciprocal: true }` opts into writing each reference back into its inverse field.
+- `defineScenarios(map)` / `composeScenarios(...scenarios)`: a scenario is a named partial `BuildMocksOptions` (plus `description`), passed as `scenario: Scenario | Scenario[]` and applied left to right with the explicit options last. Maps merge key by key (`count` per type, `overrides`/`relations` two levels deep, `scalars` by name, `qa` per dimension); everything else is last-wins. `defineScenarios` is an identity function — add `satisfies ScenarioMap<SchemaTypeMap>` for schema-checked keys.
+- `buildMatrix(schema, options?)`: crosses a `scenarios` map with `qaPresets` and returns a flat `MatrixCell[]` (`name`, `scenario`, `qa`, `options`, `mocks`). Either axis may be omitted. Each cell gets its own faker seeded from `seed` (`seedPerCell` opts out), and with `stableIds` each cell's ids are prefixed with a slug of its name unless `idPrefix` is set. `buildQaSets` is the QA-only shorthand over the same engine.
 - `buildQaSets(schema, options?)`: QA mode. Returns one `{ name, qa, mocks }` set per profile (`QA_PROFILE_NAMES`, or a `profiles` subset), each built from its own seeded faker so a set reproduces independently of the others. Accepts every `BuildMocksOptions` key plus `profiles` and a shared `qa` config the profile merges over.
 - `qa` option (`QaProfileName | QaConfig | false`): swaps generators for deliberately out-of-norm values across five dimensions — `text` (`empty`/`whitespace`/`long`/`unicode`/`injection`), `lists` (`empty`/`single`/`huge`, sized by `listSize`, default 100), `nulls` (`none`/`all`/`mixed`), `numbers` (`zero`/`negative`/`boundary`), `dates` (`epoch`/`farPast`/`farFuture`/`mixed`). `scalars` and `overrides` still win; `ID` is left alone; built-in scalars stay serializable but custom scalar constraints are not respected.
 - `@vantreeseba/graphql-mocks-codegen` plugin: emits `export type SchemaTypeMap = { … }` for every object type (root operation and introspection types excluded, entries sorted).
@@ -34,7 +37,7 @@ Key facts:
 - Basic: `const mocks = buildMocks(schema); mocks.User; mocks.Todo;` — 5 of each, with `todo.user` pointing into `mocks.User`.
 - Deterministic + per-type counts: `buildMocks(schema, { seed: 42, count: { User: 10, Todo: 50, _default: 5 }, nullChance: 0.1 })`.
 - Custom scalar mockers: `buildMocks(schema, { scalars: { DateTime: (f) => f.date.recent().toISOString(), CityName: (f) => f.location.city() } })`.
-- Field overrides (receive the seeded faker): `buildMocks(schema, { overrides: { User: { name: () => 'Alice', avatar: (f) => f.image.avatar() } } })`.
+- Field overrides (receive the seeded faker and `{ index, typeName, fieldName }`): `buildMocks(schema, { overrides: { User: { name: () => 'Alice', loginCount: (f, { index }) => index === 0 ? 0 : f.number.int(500) } } })`.
 - Stable ids: `buildMocks(schema, { stableIds: true }).User[0]` → `{ __typename: 'User', id: 'User-0', … }`.
 - Interfaces/unions: `buildMocks(schema, { resolveType: (name) => name === 'SearchResult' ? 'Post' : 'User' })`.
 - Typed pools: `buildMocks<{ User: User; Todo: Todo }>(schema)` or `buildMocks<SchemaTypeMap>(schema)`.
@@ -42,6 +45,9 @@ Key facts:
 - Apollo MockedProvider (data from the graph): `<MockedProvider mocks={[mocks.mockOperation(AwardByIdQuery)]} />`.
 - QA mode, single profile: `buildMocks(schema, { seed: 42, qa: 'longText' })` or tuned: `buildMocks(schema, { qa: { text: 'unicode', lists: 'huge', nulls: 'mixed' } })`.
 - QA sets for Storybook/Apollo: `buildQaSets(schema, { seed: 42 }).map((set) => ({ name: set.name, parameters: { apolloClient: { mocks: [set.mocks.mockOperation(UsersQuery)] } } }))`.
+- Relationship shaping: `buildMocks(schema, { relations: { User: { todos: 0, posts: { min: 1, max: 2 } }, Post: { comments: 'all', author: ({ pool }) => pool[0] }, Query: { users: 3 } } })`.
+- Named scenarios: `const scenarios = defineScenarios({ newUser: { count: { User: 1 }, relations: { User: { todos: null } }, overrides: { User: { loginCount: () => 0 } } } }); buildMocks(schema, { scenario: scenarios.newUser, seed: 42 })`.
+- Scenario × QA matrix: `buildMatrix(schema, { scenarios, qaPresets: [false, 'longText', 'hugeLists'], seed: 42 })` → one cell per combination, named `"newUser × longText"`.
 
 ## Optional
 
