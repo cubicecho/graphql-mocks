@@ -506,6 +506,30 @@ Each set is generated from its own faker instance seeded with `seed`, so a set r
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
 just that preset gives you the same data back.
 
+### Count fields stay in step with their lists
+
+A list profile resizes list fields; on the wrapper shape most paginated APIs use, that would leave the total behind:
+
+```jsonc
+{ "results": [], "totalCount": 315 }   // an empty state with a footer reading "315 of 315"
+```
+
+So with a `lists` profile active, companion count scalars are rewritten to the length of the list they count. A count is paired by name:
+
+- a name that points at a list wins — `postCount`, `numberOfPosts`, `totalPosts` all pair with `posts` (singular and plural match)
+- a name that points nowhere in particular — `total`, `count`, `totalCount`, `itemCount`, `resultCount`, `numberOfItems` — pairs with the type's list field when it has exactly one, and warns when it has more than one rather than guessing
+- a name that points at a list the type doesn't have is left alone, so `numberOfEmployees` never becomes the length of `addresses`
+
+Only integer scalars are considered, and a field with an explicit `overrides` entry is never touched. Point at a pairing the convention misses, or turn the whole thing off:
+
+```ts
+buildMocks(schema, {
+  qa: { lists: 'empty', countFields: { ProductSearchResult: { hitTotal: 'results' } } },
+});
+
+buildMocks(schema, { qa: { lists: 'empty', syncCounts: false } });
+```
+
 ### Notes
 
 - `scalars` and `overrides` still win. QA only replaces the generators you haven't defined

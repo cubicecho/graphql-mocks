@@ -178,6 +178,27 @@ export interface QaConfig {
    * @default 100
    */
   listSize?: number;
+  /**
+   * With a `lists` profile active, rewrite companion count scalars to the length of the list
+   * they count, so an emptied list no longer reports a total of 315. A count is paired by name
+   * — `totalCount`/`total`/`resultCount` and friends on a type with one list field, or
+   * `postCount`/`numberOfPosts`/`totalPosts` naming the list directly — and a field with an
+   * explicit `overrides` entry is left alone. Set `false` for a schema where the convention
+   * doesn't hold.
+   * @default true
+   */
+  syncCounts?: boolean;
+  /**
+   * Pair a count field with its list explicitly, for the schemas the convention misses:
+   *
+   * ```ts
+   * qa: { lists: 'empty', countFields: { ProductSearchResult: { hitTotal: 'results' } } }
+   * ```
+   *
+   * Keyed by type name, then by count field name, with the list field name as the value.
+   * Applied verbatim, ahead of any name matching.
+   */
+  countFields?: Record<string, Record<string, string>>;
 }
 
 /**

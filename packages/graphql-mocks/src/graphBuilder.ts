@@ -14,6 +14,7 @@ import {
   mockOperationVariants as buildMockOperationVariants,
   variablesForData,
 } from './apolloMocks.js';
+import { syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
@@ -463,6 +464,9 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   if (isReciprocal(resolved.relations)) {
     wireReciprocal(schema, objectTypes, pool, plansByType);
   }
+
+  // Phase 4: a QA list profile resized the lists; bring their count scalars back in step.
+  syncCountFields(objectTypes, pool, resolved);
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }
