@@ -284,3 +284,89 @@ describe('buildGraph', () => {
     expect(users[1]?.loginCount).not.toBe(0);
   });
 });
+
+describe('listSize', () => {
+  it('caps relationship list length at the configured maximum', () => {
+    const mocks = buildGraph(schema, { count: 30, listSize: { min: 2, max: 2 }, seed: 7 });
+    const users = mocks.User as Record<string, unknown>[];
+    for (const user of users) {
+      expect((user.todos as unknown[]).length).toBe(2);
+      expect((user.posts as unknown[]).length).toBe(2);
+    }
+  });
+
+  it('grows relationship lists past the previous hardcoded cap of 5', () => {
+    const mocks = buildGraph(schema, { count: 40, listSize: { min: 12, max: 12 }, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect((user?.todos as unknown[]).length).toBe(12);
+  });
+
+  it('is capped by the pool size, since items are drawn without replacement', () => {
+    const mocks = buildGraph(schema, { count: 3, listSize: { min: 10, max: 10 }, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect((user?.todos as unknown[]).length).toBe(3);
+  });
+
+  it('produces empty relationship lists when the max is zero', () => {
+    const mocks = buildGraph(schema, { listSize: 0, seed: 7 });
+    const user = (mocks.User as Record<string, unknown>[])[0];
+    expect(user?.todos).toEqual([]);
+  });
+
+  it('leaves generated data unchanged when unset', () => {
+    // The pool graph is circular, so compare scalar fields and list lengths rather than
+    // serializing it.
+    const shape = (mocks: ReturnType<typeof buildGraph>) =>
+      (mocks.User as Record<string, unknown>[]).map((u) => ({
+        id: u.id,
+        name: u.name,
+        todos: (u.todos as unknown[]).length,
+        posts: (u.posts as unknown[]).length,
+      }));
+    expect(shape(buildGraph(schema, { seed: 99 }))).toEqual(
+      shape(buildGraph(schema, { seed: 99, listSize: { min: 1, max: 5 } })),
+    );
+  });
+});
+
+describe('pool accessors', () => {
+  const mocks = buildGraph(schema, { seed: 21, count: 4, stableIds: true });
+
+  it('addresses items by index in generation order', () => {
+    expect((mocks.at<{ id: string }>('User', 0) as { id: string }).id).toBe('User-0');
+    expect((mocks.at<{ id: string }>('User', 3) as { id: string }).id).toBe('User-3');
+    expect(mocks.at('User', 99)).toBeUndefined();
+    expect(mocks.at('Nope', 0)).toBeUndefined();
+  });
+
+  it('returns the same object the pool holds', () => {
+    expect(mocks.at('User', 1)).toBe((mocks.User as unknown[])[1]);
+  });
+
+  it('finds items by id, comparing as strings', () => {
+    const numeric = buildGraph(schema, {
+      seed: 21,
+      count: 3,
+      overrides: { User: { id: () => 7 } },
+    });
+    expect(numeric.byId<{ id: number }>('User', '7')?.id).toBe(7);
+    expect(numeric.byId<{ id: number }>('User', 7)?.id).toBe(7);
+    expect(mocks.byId<{ id: string }>('User', 'User-2')?.id).toBe('User-2');
+    expect(mocks.byId('User', 'missing')).toBeUndefined();
+    expect(mocks.byId('Nope', '1')).toBeUndefined();
+  });
+
+  it('lists ids in generation order', () => {
+    expect(mocks.ids('User')).toEqual(['User-0', 'User-1', 'User-2', 'User-3']);
+    expect(mocks.ids('Nope')).toEqual([]);
+  });
+
+  it('skips items with no id rather than emitting undefined entries', () => {
+    const noIds = buildGraph(schema, { seed: 21, count: 3 });
+    // Comment has an id; a type without one contributes nothing.
+    for (const item of noIds.Comment as Record<string, unknown>[]) {
+      item.id = undefined;
+    }
+    expect(noIds.ids('Comment')).toEqual([]);
+  });
+});

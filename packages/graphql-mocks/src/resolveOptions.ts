@@ -1,5 +1,6 @@
 import type { Faker } from '@faker-js/faker';
-import { resolveFaker } from './helpers.js';
+import type { ArgMatchingOptions } from './argMatching.js';
+import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js';
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
@@ -33,6 +34,16 @@ export interface ResolvedOptions {
   nullChance: number;
   addTypename: boolean;
   stableIds: boolean;
+  /**
+   * Default sizing for every generated list, before a QA list profile or a `relations` entry —
+   * both of which are more specific and win over it.
+   */
+  listSize: ListSizeRange;
+  /**
+   * Left unresolved: `dataForOperation` and the request handler can override it per call, and
+   * `resolveArgMatching` is what folds the two together at the point of use.
+   */
+  matchArguments: boolean | ArgMatchingOptions | undefined;
   /** Prepended to every stable id. Empty unless the caller (or `buildMatrix`) sets it. */
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
@@ -58,6 +69,8 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     nullChance: qaNullChance(qa) ?? options.nullChance ?? 0,
     addTypename: options.addTypename ?? true,
     stableIds: options.stableIds ?? false,
+    listSize: resolveListSize(options.listSize),
+    matchArguments: options.matchArguments,
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},

@@ -1,9 +1,23 @@
 import type { Faker } from '@faker-js/faker';
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import type { DocumentNode } from 'graphql';
-import type { MockOperationOptions, MockOperationVariants, MockedResponse } from './apolloMocks.js';
+import type {
+  DynamicMockOperationVariants,
+  DynamicMockedResponse,
+  MockOperationOptions,
+  MockOperationVariants,
+  MockedResponse,
+} from './apolloMocks.js';
+import type { ArgMatchingOptions } from './argMatching.js';
+import type { OperationMocks, OperationModule } from './operationsFrom.js';
+import type { MockHandlerOptions, MockRequestHandler } from './requestHandler.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
+
+/**
+ * Size of generated list fields: a bare number for an exact length, or an inclusive range.
+ */
+export type ListSizeConfig = number | { min: number; max: number };
 
 /** Where an override is firing — the instance's position in its pool, and the field's site. */
 export interface OverrideContext {
@@ -208,6 +222,14 @@ export interface BuildMocksOptions<
    */
   nullChance?: number;
   /**
+   * Size of generated list fields — both wired relationship lists and root list fields
+   * resolved by `dataForOperation`. Raise it when a query pages through more than a handful
+   * of items; the pool must also be large enough (see `count`), since lists are sampled
+   * without replacement.
+   * @default { min: 1, max: 5 }
+   */
+  listSize?: ListSizeConfig;
+  /**
    * Custom scalar mockers. Merged over the built-in defaults; user wins on conflicts.
    * Key is the scalar name as it appears in the schema.
    */
@@ -248,6 +270,24 @@ export interface BuildMocksOptions<
    * Return the concrete type name to use when mocking a field of that abstract type.
    */
   resolveType?: (abstractTypeName: string) => keyof TTypes & string;
+  /**
+   * Interpret operation arguments when resolving fields instead of ignoring them: match pooled
+   * items by scalar equality, apply `skip`/`limit` paging to list fields, and apply substring
+   * filters from search-style arguments. Pass an {@link ArgMatchingOptions} object to tune it.
+   *
+   * Off by default, so existing output is unchanged. Turning it on is safe for operations that
+   * supply no variables — an argument bound to a variable this package synthesized (because the
+   * operation declares it non-null and the caller didn't pass one) is ignored, so
+   * `mocks.mockOperation(UserByIdQuery)` still returns a random pooled user.
+   *
+   * Arguments are matched only by exact field name; there is no `authorId` -> `author.id`
+   * traversal. When a root field returns a wrapper type (`{ totalCount, results }`) the entity
+   * list sits below the arguments and cannot be reached — use `mockOperation(doc, (vars) => …)`
+   * with the exported `paginate`/`searchItems` there instead.
+   *
+   * @default false
+   */
+  matchArguments?: boolean | ArgMatchingOptions;
   /**
    * Add a `__typename` field (set to the type name) to every generated object.
    * Required by the Apollo cache, so it's on by default.
@@ -319,17 +359,44 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
   ): TTypes[K] | undefined;
   find<T = unknown>(typeName: string, predicate: (item: T) => boolean): T | undefined;
   /**
+   * The pooled item of `typeName` at `index`, in generation order — the same order `stableIds`
+   * numbers them in. Returns undefined when the index is out of range.
+   */
+  at<K extends keyof TTypes & string>(typeName: K, index: number): TTypes[K] | undefined;
+  at<T = unknown>(typeName: string, index: number): T | undefined;
+  /**
+   * The pooled item of `typeName` with this id. Ids are compared as strings, so a numeric id
+   * from a variable matches a string id in the pool.
+   */
+  byId<K extends keyof TTypes & string>(typeName: K, id: string | number): TTypes[K] | undefined;
+  byId<T = unknown>(typeName: string, id: string | number): T | undefined;
+  /**
+   * The ids of every pooled item of `typeName`, in generation order; items without an id are
+   * skipped. Unlike `at(...)?.id`, this needs no `TTypes` map to come back typed:
+   *
+   * ```ts
+   * const id = mocks.ids('User')[0] as string;
+   * mocks.mockOperation(UserByIdQuery, { variables: { id }, matchArguments: true });
+   * ```
+   *
+   * Pair it with `stableIds` for readable, stable values.
+   */
+  ids(typeName: string): string[];
+  /**
    * Resolve a query or mutation against the mock graph and return its data shaped to the
    * selection set — no need to assemble the result by hand. Root fields are drawn from the
    * pools by their return type; nested fields follow the already-wired object references.
    * With a `TypedDocumentNode` the return type is inferred from the document.
    *
-   * Variables don't affect which mocks are chosen; pass them only if your schema requires
-   * them for execution (required variables are otherwise auto-filled with placeholders).
+   * Variables affect which mocks are chosen only when
+   * {@link BuildMocksOptions.matchArguments} is on (globally or via the third argument here);
+   * otherwise pass them only if your schema requires them for execution — required variables
+   * are auto-filled with placeholders when omitted.
    */
   dataForOperation<TData = unknown, TVars = Record<string, unknown>>(
     document: TypedDocumentNode<TData, TVars> | DocumentNode,
     variables?: TVars extends Record<string, unknown> ? Partial<TVars> : Record<string, unknown>,
+    matchArguments?: boolean | ArgMatchingOptions,
   ): TData;
   /**
    * Build an Apollo `MockedProvider` entry for the operation with **no data argument** — the
@@ -343,10 +410,16 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    * ```
    *
    * To supply the data yourself instead, use the standalone `mockOperation(operation, data)`.
+   * Pass `dynamic: true` to resolve per request from the incoming variables instead of once
+   * up front — `result` then becomes a function, which is why it is opt-in.
    */
   mockOperation<TData = unknown, TVars = Record<string, unknown>>(
     operation: TypedDocumentNode<TData, TVars>,
-    options?: MockOperationOptions<TVars>,
+    options: MockOperationOptions<TVars, TData> & { dynamic: true },
+  ): DynamicMockedResponse<TData, TVars>;
+  mockOperation<TData = unknown, TVars = Record<string, unknown>>(
+    operation: TypedDocumentNode<TData, TVars>,
+    options?: MockOperationOptions<TVars, TData>,
   ): MockedResponse<TData, TVars>;
   /**
    * Like {@link MockHelpers.mockOperation}, but returns the success / long-load / error trio at
@@ -354,8 +427,47 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    */
   mockOperationVariants<TData = unknown, TVars = Record<string, unknown>>(
     operation: TypedDocumentNode<TData, TVars>,
-    options?: MockOperationOptions<TVars>,
+    options: MockOperationOptions<TVars, TData> & { dynamic: true },
+  ): DynamicMockOperationVariants<TData, TVars>;
+  mockOperationVariants<TData = unknown, TVars = Record<string, unknown>>(
+    operation: TypedDocumentNode<TData, TVars>,
+    options?: MockOperationOptions<TVars, TData>,
   ): MockOperationVariants<TData, TVars>;
+  /**
+   * Turn a codegen document module into a keyed map of {@link MockHelpers.mockOperationVariants}
+   * results, replacing a file of per-operation re-exports with one call:
+   *
+   * ```ts
+   * import * as operations from './queries.generated.js';
+   * const opMocks = mocks.mockOperationsFrom(operations);
+   * // opMocks.UserByIdDocument.withResults | .withLongLoadTime | .withError
+   * ```
+   *
+   * Keys are the module's **export names**, not operation names, so each entry's
+   * `withResults.result.data` is typed to that operation. Non-document exports are skipped.
+   * Entries are built lazily on first access, so a fifty-document module costs nothing at
+   * import time — but spreading the map, or `Object.values`, forces every entry.
+   */
+  mockOperationsFrom<TModule extends OperationModule>(
+    module: TModule,
+    options?: MockOperationOptions,
+  ): OperationMocks<TModule>;
+  /**
+   * Build a handler that answers **any** operation from this graph — no per-operation
+   * registration, so one handler covers a whole screen's queries and mutations:
+   *
+   * ```ts
+   * const handler = mocks.toRequestHandler();
+   * const { data } = await handler({ query: SomeQuery, variables: { id } });
+   * ```
+   *
+   * Results are memoized per document + variables by default, so a refetch or a second
+   * identical query returns the same rows. `overrides` force a specific operation into an
+   * error, loading or fixed-data state, and `calls` records what was asked for.
+   *
+   * Pair it with the `@vantreeseba/graphql-mocks/apollo` export to get an `ApolloLink`.
+   */
+  toRequestHandler(options?: MockHandlerOptions): MockRequestHandler;
   /**
    * Build a resolver map keyed by type name, each returning a random pooled instance.
    * Type names declared in `TTypes` come back typed (`resolvers.User()` is `TTypes['User']`)

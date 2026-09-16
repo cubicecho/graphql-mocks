@@ -81,3 +81,70 @@ describe('mockOperationVariants', () => {
     expect(variants.withError.maxUsageCount).toBe(3);
   });
 });
+
+describe('mockOperation with a resolver function', () => {
+  const resolver = (vars: AwardVars): AwardData => ({ award: { id: vars.id } });
+
+  it('produces a result function that is called with the incoming variables', () => {
+    const mock = mockOperation(AwardByIdQuery, resolver);
+    expect(typeof mock.result).toBe('function');
+    expect(mock.result?.({ id: 'Award-7' })).toEqual({ data: { award: { id: 'Award-7' } } });
+  });
+
+  it('keeps the same envelope options as the static form', () => {
+    const mock = mockOperation(AwardByIdQuery, resolver, { delay: 5, maxUsageCount: 2 });
+    expect(mock.request.query).toBe(AwardByIdQuery);
+    expect(mock.delay).toBe(5);
+    expect(mock.maxUsageCount).toBe(2);
+  });
+
+  it('calls the resolver once per request rather than once up front', () => {
+    let calls = 0;
+    const mock = mockOperation(AwardByIdQuery, (vars: AwardVars) => {
+      calls += 1;
+      return { award: { id: vars.id } };
+    });
+    expect(calls).toBe(0);
+    mock.result?.({ id: 'a' });
+    mock.result?.({ id: 'b' });
+    expect(calls).toBe(2);
+  });
+
+  it('keeps the static overload for plain data, even when data has function-valued fields', () => {
+    // A plain object must never select the dynamic signature.
+    const mock = mockOperation(AwardByIdQuery, data);
+    expect(mock.result).toEqual({ data });
+  });
+
+  it('produces resolver-form variants', () => {
+    const variants = mockOperationVariants(AwardByIdQuery, resolver);
+    expect(variants.withResults.result?.({ id: 'x' })).toEqual({ data: { award: { id: 'x' } } });
+    expect(variants.withLongLoadTime.delay).toBe(1_000_000);
+    expect(variants.withError.error?.message).toContain('AwardById');
+    // The same resolver backs every variant.
+    expect(variants.withError.result?.({ id: 'y' })).toEqual({ data: { award: { id: 'y' } } });
+  });
+});
+
+describe('mockOperation overload types', () => {
+  // Compile-time guards, enforced by `npm run typecheck:tests`: adding the resolver form must
+  // not widen `result` into a union, because consumers read `mock.result?.data` directly.
+  type Expect<T extends true> = T;
+  type Equals<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
+    ? true
+    : false;
+
+  it('keeps result.data typed on the static overload', () => {
+    const mock = mockOperation(AwardByIdQuery, data);
+    const isStatic: Expect<Equals<typeof mock.result, { data?: AwardData } | undefined>> = true;
+    expect(isStatic).toBe(true);
+  });
+
+  it('types the resolver overload result as a function of the variables', () => {
+    const mock = mockOperation(AwardByIdQuery, (vars: AwardVars) => ({ award: { id: vars.id } }));
+    const isDynamic: Expect<
+      Equals<typeof mock.result, ((variables: AwardVars) => { data?: AwardData }) | undefined>
+    > = true;
+    expect(isDynamic).toBe(true);
+  });
+});

@@ -27,6 +27,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./apollo": {
+      "types": "./dist/apollo/index.d.ts",
+      "import": "./dist/apollo/index.js"
     }
   },
   "files": [
@@ -44,12 +48,16 @@
     "coverage": "vitest run --coverage"
   },
   "peerDependencies": {
+    "@apollo/client": ">=3.8 <5",
     "@faker-js/faker": ">=9",
     "@graphql-typed-document-node/core": ">=3",
     "graphql": ">=16",
     "graphql-scalars": ">=1.23"
   },
   "peerDependenciesMeta": {
+    "@apollo/client": {
+      "optional": true
+    },
     "@graphql-typed-document-node/core": {
       "optional": true
     },
@@ -58,6 +66,7 @@
     }
   },
   "devDependencies": {
+    "@apollo/client": "^4.3.0",
     "@faker-js/faker": "^9.8.0",
     "@graphql-typed-document-node/core": "^3.2.0",
     "graphql": "^16.14.0",

@@ -1,7 +1,7 @@
 import { faker as defaultFaker } from '@faker-js/faker';
 import { Faker, en } from '@faker-js/faker';
 import { describe, expect, it } from 'vitest';
-import { OPERATION_TYPE_NAMES, resolveCount, resolveFaker } from './helpers.js';
+import { OPERATION_TYPE_NAMES, resolveCount, resolveFaker, resolveListSize } from './helpers.js';
 
 describe('resolveCount', () => {
   it('returns default 5 when no config provided', () => {
@@ -70,5 +70,31 @@ describe('OPERATION_TYPE_NAMES', () => {
   it('does not contain regular types', () => {
     expect(OPERATION_TYPE_NAMES.has('User')).toBe(false);
     expect(OPERATION_TYPE_NAMES.has('Todo')).toBe(false);
+  });
+});
+
+describe('resolveListSize', () => {
+  it('defaults to 1-5 when unset', () => {
+    expect(resolveListSize(undefined)).toEqual({ min: 1, max: 5 });
+  });
+
+  it('treats a bare number as an exact length', () => {
+    expect(resolveListSize(20)).toEqual({ min: 20, max: 20 });
+  });
+
+  it('passes a range through', () => {
+    expect(resolveListSize({ min: 2, max: 8 })).toEqual({ min: 2, max: 8 });
+  });
+
+  it('orders reversed bounds', () => {
+    expect(resolveListSize({ min: 9, max: 3 })).toEqual({ min: 3, max: 9 });
+  });
+
+  it('clamps negative bounds to zero', () => {
+    expect(resolveListSize({ min: -4, max: -1 })).toEqual({ min: 0, max: 0 });
+  });
+
+  it('honors an explicit fallback', () => {
+    expect(resolveListSize(undefined, { min: 3, max: 3 })).toEqual({ min: 3, max: 3 });
   });
 });

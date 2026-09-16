@@ -16,6 +16,11 @@ import {
 } from './apolloMocks.js';
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
+import {
+  type OperationMocks,
+  type OperationModule,
+  buildOperationMocks,
+} from './operationsFrom.js';
 import { qaListLength } from './qa.js';
 import {
   isReciprocal,
@@ -25,14 +30,30 @@ import {
   resolveRelation,
   validateRelations,
 } from './relations.js';
+import {
+  type MockHandlerOptions,
+  type MockRequestHandler,
+  createRequestHandler,
+} from './requestHandler.js';
 import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
 
-/** List sizing when nothing more specific applies — 1 to min(5, pool length) items. */
-const DEFAULT_LIST_BOUNDS = { min: 1, max: 5 };
 /** A singular field draws exactly one object; the QA list profile does not apply to it. */
 const SINGULAR_BOUNDS = { min: 1, max: 1 };
+
+// The public builders are overloaded on static vs. resolver-function data; the graph-bound
+// wrappers decide which applies at runtime, so they call through an unoverloaded view.
+const looseMockOperation = buildMockOperation as (
+  document: Parameters<typeof buildMockOperation>[0],
+  data: unknown,
+  options?: MockOperationOptions,
+) => unknown;
+const looseMockOperationVariants = buildMockOperationVariants as (
+  document: Parameters<typeof buildMockOperationVariants>[0],
+  data: unknown,
+  options?: MockOperationOptions,
+) => unknown;
 
 /**
  * Everything about one relationship field that doesn't vary by instance, resolved once per
@@ -135,7 +156,7 @@ function planRelationFields(
     if (isScalarType(namedType) || isEnumType(namedType)) continue;
 
     const spec = resolveRelation(objectType.name, fieldName, resolved.relations);
-    const fallback = isList ? qaListLength(resolved.qa, DEFAULT_LIST_BOUNDS) : SINGULAR_BOUNDS;
+    const fallback = isList ? qaListLength(resolved.qa, resolved.listSize) : SINGULAR_BOUNDS;
     const plan = { fieldName, isRequired, isList, spec, bounds: relationBounds(spec, fallback) };
 
     if (isObjectType(namedType)) {
@@ -173,6 +194,7 @@ function createMockResult(
   const dataForOperation = (
     document: Parameters<typeof resolveOperationData>[3],
     variables?: Record<string, unknown>,
+    matchArguments?: Parameters<typeof resolveOperationData>[5],
   ) =>
     resolveOperationData(
       schema,
@@ -180,33 +202,87 @@ function createMockResult(
       resolved,
       document,
       variables,
+      matchArguments,
     );
+
+  /**
+   * Data source for the graph-bound builders: a value resolved once by default, or a resolver
+   * called per request when `dynamic` is set, so real incoming variables reach the argument
+   * engine even when `request.variables` is a match-any predicate. `transform` applies to
+   * whichever path runs.
+   */
+  const operationData = (
+    document: Parameters<typeof buildMockOperation>[0],
+    opOptions: MockOperationOptions,
+  ): unknown => {
+    const transform = opOptions.transform as
+      | ((data: unknown, variables: Record<string, unknown>) => unknown)
+      | undefined;
+    const resolve = (variables: Record<string, unknown> | undefined) => {
+      const data = dataForOperation(document, variables, opOptions.matchArguments);
+      return transform ? transform(data, variables ?? {}) : data;
+    };
+    return opOptions.dynamic
+      ? (variables: Record<string, unknown>) => resolve(variables)
+      : resolve(variablesForData(opOptions.variables) as Record<string, unknown> | undefined);
+  };
 
   const helpers = {
     find<T = unknown>(typeName: string, predicate: (item: T) => boolean): T | undefined {
       const items = pool[typeName] as T[] | undefined;
       return items?.find(predicate);
     },
+    at<T = unknown>(typeName: string, index: number): T | undefined {
+      return (pool[typeName] as T[] | undefined)?.[index];
+    },
+    byId<T = unknown>(typeName: string, id: string | number): T | undefined {
+      const wanted = String(id);
+      return (pool[typeName] as { id?: unknown }[] | undefined)?.find(
+        (item) => item != null && String(item.id) === wanted,
+      ) as T | undefined;
+    },
+    ids(typeName: string): string[] {
+      const items = pool[typeName] as { id?: unknown }[] | undefined;
+      if (!items) return [];
+      const result: string[] = [];
+      for (const item of items) {
+        if (item != null && item.id != null) result.push(String(item.id));
+      }
+      return result;
+    },
     dataForOperation,
     mockOperation(
       document: Parameters<typeof buildMockOperation>[0],
       opOptions: MockOperationOptions = {},
     ) {
-      const data = dataForOperation(
-        document,
-        variablesForData(opOptions.variables) as Record<string, unknown> | undefined,
-      );
-      return buildMockOperation(document, data, opOptions);
+      return looseMockOperation(document, operationData(document, opOptions), opOptions);
     },
     mockOperationVariants(
       document: Parameters<typeof buildMockOperationVariants>[0],
       opOptions: MockOperationOptions = {},
     ) {
-      const data = dataForOperation(
-        document,
-        variablesForData(opOptions.variables) as Record<string, unknown> | undefined,
+      return looseMockOperationVariants(document, operationData(document, opOptions), opOptions);
+    },
+    toRequestHandler(handlerOptions: MockHandlerOptions = {}): MockRequestHandler {
+      return createRequestHandler(
+        { schema, pool: pool as Record<string, Record<string, unknown>[]>, resolved },
+        handlerOptions,
       );
-      return buildMockOperationVariants(document, data, opOptions);
+    },
+    mockOperationsFrom<TModule extends OperationModule>(
+      module: TModule,
+      opOptions: MockOperationOptions = {},
+    ): OperationMocks<TModule> {
+      return buildOperationMocks(
+        module,
+        (document, docOptions) =>
+          looseMockOperationVariants(
+            document as Parameters<typeof buildMockOperationVariants>[0],
+            operationData(document as Parameters<typeof buildMockOperation>[0], docOptions ?? {}),
+            docOptions,
+          ),
+        opOptions,
+      );
     },
     toResolvers(): Record<string, () => unknown> {
       const resolvers: Record<string, () => unknown> = {};

@@ -10,6 +10,8 @@ Relationships are wired as actual object references — `todo.user` is the same 
 npm install @vantreeseba/graphql-mocks
 # peer deps
 npm install graphql @faker-js/faker
+# optional — only for the /apollo link export
+npm install @apollo/client
 ```
 
 ## Usage
@@ -127,7 +129,7 @@ const data = mocks.dataForOperation(UserByIdQuery);
 // { user: { id, name, posts: [{ id, author: { id } }] } } — exactly the fields queried
 ```
 
-`dataForOperation` understands lists, fragments, and interface/union fields (resolved via each mock's `__typename`). Variables don't influence which mocks are chosen, so they're optional — any required ones are auto-filled with placeholders just so execution succeeds. With a `TypedDocumentNode` the return type is inferred from the document.
+`dataForOperation` understands lists, fragments, and interface/union fields (resolved via each mock's `__typename`). Variables are optional — any required ones are auto-filled with placeholders just so execution succeeds. By default they don't influence which mocks are chosen; turn on [argument matching](#argument-matching) to make them select data. With a `TypedDocumentNode` the return type is inferred from the document.
 
 ## Apollo `MockedProvider`
 
@@ -178,6 +180,265 @@ m.withError;        // rejects with an error naming the operation
 
 `@graphql-typed-document-node/core` (bundled with Apollo Client and graphql-codegen) provides the `TypedDocumentNode` type; it's an optional peer, only needed if you use these helpers.
 
+## Argument matching
+
+By default arguments don't influence which mocks come back — `user(id: "abc")` returns a random pooled user. Set `matchArguments` (on `buildMocks`, on a handler, or per call) and arguments that land in one of three narrow buckets start selecting data:
+
+```ts
+const mocks = buildMocks(schema, { matchArguments: true, stableIds: true });
+
+mocks.dataForOperation(parse('{ user(id: "User-2") { id name } }'));
+// { user: { id: 'User-2', … } }
+
+mocks.dataForOperation(parse('{ users(skip: 10, limit: 5) { id } }'));
+// the 11th–15th pooled users, in stable order
+
+mocks.dataForOperation(parse('{ posts(titleContains: "graph") { id title } }'));
+// only posts whose title contains "graph"
+```
+
+| Bucket | Matches | Example |
+|--------|---------|---------|
+| Equality | An argument named **exactly** like a scalar/enum field on the return type | `todos(priority: HIGH)`, `user(id: …)` |
+| Search | `search`, `query`, `q`, `filter`, `searchTerm`, `term`, or `<field>Contains` / `<field>_contains` | `users(search: "ana")` |
+| Paging | `skip`/`offset` plus `limit`/`first`/`take`, on list return types | `users(skip: 10, limit: 5)` |
+
+There is deliberately **no fuzzy matching** — no `authorId → author.id`, no snake/camel bridging, no suffix stripping. One inference is allowed: a list argument whose name minus a trailing `s` names a non-list scalar field (`ids: [ID!]` → `id`) becomes an `in` match. Anything else is ignored, exactly as with the flag off, because a wrong guess produces a silently empty screen.
+
+Every list name is configurable, and matching can be narrowed by bucket:
+
+```ts
+buildMocks(schema, {
+  matchArguments: {
+    paging: true,
+    search: true,
+    equality: false,
+    nested: true,               // user { posts(first: 2) } — on by default
+    limitArgs: ['limit', 'pageSize'],
+    ignoreArgs: ['locale'],
+    onMiss: { singular: 'fallback', list: 'empty' },
+  },
+});
+```
+
+**Variables you didn't supply are ignored.** Required variables are auto-filled so execution can run, and any argument bound to one of those invented values is dropped — so `mocks.mockOperation(UserByIdQuery)` with no variables still returns a random pooled user, exactly as with matching off. A variable you pass, a literal, or a schema/document default counts as intent and is applied.
+
+**When nothing matches:**
+
+- A **list** returns `[]`. An empty result is a wanted state — the most common empty-state story — and falling back would return rows that visibly contradict the filter.
+- A **nullable singular** field falls back to the random pick. A miss means "you named an id we never generated"; `null` would turn a working screen into an unrequested not-found path. Set `onMiss: { singular: 'empty' }` if you want the not-found path.
+- A **non-null singular** field always falls back, whatever `onMiss` says — `null` there is a GraphQL error plus a warning, which is strictly worse than a random item.
+- **Paging** never falls back: `skip: 100` over 5 items legitimately yields `[]`.
+
+Paging switches the source from a random subset to the whole pool in stable order, so pages line up. Pools hold `count` items (default 5) and lists draw `listSize` items (default 1–5) — raise both when you need more than one page:
+
+```ts
+buildMocks(schema, { count: 50, listSize: { min: 10, max: 20 }, matchArguments: true });
+```
+
+**Known limitation.** When a root field returns a wrapper type (`{ totalCount, results }`), the entity list sits one level below the arguments and the engine cannot connect them. Use a resolver function plus the exported `paginate` / `searchItems` there:
+
+```ts
+import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
+
+mocks.mockOperation(SearchUsersQuery, {
+  dynamic: true,
+  transform: (data, vars) => ({
+    searchUsers: {
+      ...data.searchUsers,
+      results: paginate(searchItems(mocks.User, vars.term), vars),
+    },
+  }),
+});
+```
+
+## Resolver-function mocks
+
+`mockOperation` and `mockOperationVariants` also take a function of the incoming variables, so one mock answers many variable combinations instead of one envelope per case:
+
+```ts
+mockOperation(UserByIdQuery, (vars) => ({ user: usersById[vars.id] }));
+// → { request, result: (vars) => ({ data }) }
+```
+
+The static overload is unchanged: passing plain data still yields `result: { data }`, so existing `mock.result?.data` reads keep working and keep their types.
+
+On the graph-bound form, pass `dynamic: true` to resolve from the graph **per request** — which is what lets real incoming variables reach argument matching even though `request.variables` matches anything:
+
+```ts
+mocks.mockOperation(SearchUsersQuery, { dynamic: true, matchArguments: true });
+```
+
+`transform: (data, variables) => data` post-processes whichever path runs, and `matchArguments` overrides the graph-wide setting for this operation only.
+
+## A transport for any operation
+
+`mocks.toRequestHandler()` answers **any** operation from the graph — no per-operation registration, so one handler covers a whole screen:
+
+```ts
+const handler = mocks.toRequestHandler();
+
+const { data } = await handler({ query: UsersQuery });
+const { data: one } = await handler({ query: UserByIdQuery, variables: { id } });
+```
+
+Results are memoized per document + variables, so a refetch or a second identical query in the same render tree returns the same rows instead of a fresh random draw (`memoize: false` to opt out). Only values produced by execution are returned — never a pooled object or anything reachable from one — so results are acyclic and safe to clone.
+
+Overrides force specific operations into a state, first match wins:
+
+```ts
+const handler = mocks.toRequestHandler({
+  delay: { min: 20, max: 80 },
+  overrides: [
+    { match: 'UserById', loading: true },                  // never settles, schedules no timer
+    { match: TodosQuery, errors: 'Something went wrong' }, // { data: null, errors }
+    { match: (op) => op.operationType === 'mutation', networkError: 'offline' }, // rejects
+    { match: 'Users', data: (op, fromGraph) => ({ users: fromGraph.users.slice(0, 1) }) },
+    { match: 'Users', errors: 'first time only', once: true },
+  ],
+});
+
+handler.calls;  // every operation seen, in order: name, type, variables, document
+handler.reset(); // clears the memo, the calls, and consumed `once` overrides
+```
+
+Mutations run through the same path and **never mutate the pool** — that would make stories order-dependent across re-renders and HMR, and real write semantics are app-specific. Close an override's `data` function over your own state when you need a write to stick.
+
+### Apollo
+
+`@vantreeseba/graphql-mocks/apollo` wraps a graph (or a handler) in an `ApolloLink`. `@apollo/client` is an **optional peer** (`>=3.8 <5`), so the root entry stays dependency-free:
+
+```tsx
+import { ApolloClient, ApolloProvider, InMemoryCache } from '@apollo/client';
+import { buildMocks } from '@vantreeseba/graphql-mocks';
+import { mockLink } from '@vantreeseba/graphql-mocks/apollo';
+
+const mocks = buildMocks(schema, { seed: 1, stableIds: true });
+const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(mocks) });
+
+render(
+  <ApolloProvider client={client}>
+    <Screen />
+  </ApolloProvider>,
+);
+```
+
+Pass a handler instead of a graph when you want its spy surface:
+
+```ts
+const handler = mocks.toRequestHandler({ overrides: [{ match: 'Users', loading: true }] });
+const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(handler) });
+// …assert on handler.calls
+```
+
+## Story states
+
+`mockScenarios` builds the three states a component is usually exercised in, from one base config:
+
+```ts
+import { mockScenarios } from '@vantreeseba/graphql-mocks';
+
+const states = mockScenarios({ matchArguments: true });
+// states.default | states.loading | states.errored — each MockHandlerOptions
+```
+
+Pass a target to put only some operations into the loading/error state, leaving the rest resolving normally — what a screen with one failing panel needs:
+
+```ts
+mockScenarios({}, 'UserById');              // one operation
+mockScenarios({}, ['UserById', TodosQuery]); // several
+mockScenarios({}, (op) => op.operationType === 'mutation');
+```
+
+There's no Storybook dependency and no CSF types here — the parameter key and the spread into a story belong to your Storybook addon, which churns across majors. A decorator is a few lines:
+
+```tsx
+// .storybook/preview.tsx
+import { ApolloClient, ApolloProvider, InMemoryCache } from '@apollo/client';
+import { buildMocks } from '@vantreeseba/graphql-mocks';
+import { mockLink } from '@vantreeseba/graphql-mocks/apollo';
+import { schema } from './schema';
+
+export const decorators = [
+  (Story, context) => {
+    const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
+    const client = new ApolloClient({
+      cache: new InMemoryCache(),
+      link: mockLink(mocks, context.parameters.graphqlMocks ?? {}),
+    });
+    return (
+      <ApolloProvider client={client}>
+        <Story />
+      </ApolloProvider>
+    );
+  },
+];
+```
+
+```tsx
+// SomeScreen.stories.tsx
+const states = mockScenarios({}, 'UserById');
+
+export const Default = { parameters: { graphqlMocks: states.default } };
+export const Loading = { parameters: { graphqlMocks: states.loading } };
+export const Errored = { parameters: { graphqlMocks: states.errored } };
+```
+
+The same shape works in component tests:
+
+```tsx
+import { type MockHandlerOptions, buildMocks } from '@vantreeseba/graphql-mocks';
+
+function renderWithMocks(ui: React.ReactElement, options: MockHandlerOptions = {}) {
+  const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
+  const handler = mocks.toRequestHandler(options);
+  const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(handler) });
+  return { mocks, handler, ...render(<ApolloProvider client={client}>{ui}</ApolloProvider>) };
+}
+```
+
+## Addressing pooled data
+
+```ts
+mocks.ids('User');            // ['User-0', 'User-1', …] in generation order
+mocks.at('User', 0);          // the first pooled User
+mocks.byId('User', 'User-2'); // looked up by id, compared as strings
+```
+
+`ids` needs no `TTypes` map to come back typed, which `at('User', 0)?.id` does under `noUncheckedIndexedAccess`:
+
+```ts
+const id = mocks.ids('User')[0] as string;
+mocks.mockOperation(UserByIdQuery, { variables: { id }, matchArguments: true });
+```
+
+Pair it with `stableIds: true` for readable, stable values.
+
+## Deriving mocks from a document module
+
+```ts
+import * as operations from './queries.generated';
+
+const opMocks = mocks.mockOperationsFrom(operations);
+opMocks.UserByIdDocument.withResults;
+opMocks.TodosDocument.withError;
+```
+
+Keys are the module's **export names**, not operation names — operation names live only in the runtime AST, so keying by them would make the type unsound. Non-document exports are skipped. Entries are built lazily on first read, so a fifty-document module costs nothing at import time; spreading the map forces all of them, `Object.keys` does not.
+
+## Collection helpers
+
+The same primitives the argument engine uses, exported for the cases it can't reach:
+
+```ts
+import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
+
+paginate(mocks.User, { skip: 10, limit: 5 });  // also offset/first/take
+searchItems(mocks.User, 'ana');                // every string field
+searchItems(mocks.User, 'ana', ['name']);      // named fields only
+```
+
+Absent or null arguments are no-ops, so they're safe to apply unconditionally.
 ## QA mode
 
 Mocks are realistic by default, and realistic data never finds the bug where a 400-character
@@ -481,7 +742,9 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
+| `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
+| `listSize` | `number \| { min: number, max: number }` | `{ min: 1, max: 5 }` | How many items generated list fields hold, unless a QA `lists` profile or a `relations` entry says otherwise |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
-| `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
+| `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |

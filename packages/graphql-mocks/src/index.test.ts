@@ -12,13 +12,17 @@ const EXPORTS = [
   'buildMocks',
   'buildQaSets',
   'composeScenarios',
+  'createRequestHandler',
   'defaultScalarMockers',
   'defineScenarios',
   'mockOperation',
   'mockOperationVariants',
+  'mockScenarios',
+  'paginate',
   'qaScalarMockers',
   'resolveRelation',
   'resolveScalarMocker',
+  'searchItems',
 ];
 
 describe('index', () => {

@@ -7,12 +7,12 @@ The runtime introspects every object type in a `GraphQLSchema` (or SDL string) a
 Key facts:
 - TypeScript 5, strict mode, ESM only.
 - Two published packages, versioned and released together via semantic-release: `@vantreeseba/graphql-mocks` (runtime) and `@vantreeseba/graphql-mocks-codegen` (codegen plugin).
-- Runtime peer deps: `graphql >=16`, `@faker-js/faker >=9` (plus optional `@graphql-typed-document-node/core >=3` for the Apollo helpers). Codegen peer deps: `graphql >=16`, `@graphql-codegen/plugin-helpers >=5`, `@graphql-codegen/visitor-plugin-common >=5`.
+- Runtime peer deps: `graphql >=16`, `@faker-js/faker >=9` (plus optional `@graphql-typed-document-node/core >=3` for the Apollo helpers and `@apollo/client >=3.8 <5` for the `./apollo` subpath — the root entry never imports it). Codegen peer deps: `graphql >=16`, `@graphql-codegen/plugin-helpers >=5`, `@graphql-codegen/visitor-plugin-common >=5`.
 
 ## Documentation
 
 - [Monorepo overview](https://github.com/vantreeseba/graphql-mocks/blob/main/README.md): Packages table and development workflow.
-- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, relations, scenario, resolveType, addTypename, stableIds, idPrefix, qa), QA mode, scenarios, typed pools, and helpers.
+- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, relations, scenario, resolveType, addTypename, stableIds, idPrefix, listSize, qa, matchArguments), QA mode, scenarios, argument matching, the request handler and Apollo link, typed pools, and helpers.
 - [Codegen plugin: @vantreeseba/graphql-mocks-codegen](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks-codegen/README.md): generating a `SchemaTypeMap`, plugin configuration (`typeMapName`, `typesImportPath`, `typesNamespace`), and generated output.
 - [AGENTS.md](https://github.com/vantreeseba/graphql-mocks/blob/main/AGENTS.md): Project structure, stack, conventions, and contributor guidance.
 
@@ -21,10 +21,16 @@ Key facts:
 - `buildMocks(schema, options?)`: Core entry point. Accepts a `GraphQLSchema` or SDL string; returns a `MockResult` keyed by object-type name. Generic `buildMocks<TTypes>(schema)` returns typed pools.
 - `MockResult.find(typeName, predicate)`: Find a single mocked item; the item is typed when a `TTypes`/`SchemaTypeMap` is supplied, or `find<T>('Type', …)` for a typed one-off.
 - `MockResult.toResolvers()`: Produce Apollo Server / GraphQL Yoga mock resolvers (`{ Type: () => <random item from pool> }`) for `addMocksToSchema`.
-- `MockResult.dataForOperation(document, variables?)`: Execute a query/mutation against the graph and return data shaped to the selection set (lists, fragments, and interface/union fields supported). Return type inferred from a `TypedDocumentNode`.
-- `mockOperation(query, data, options?)` / `mockOperationVariants(...)`: Build Apollo `MockedProvider` `MockedResponse` entries from supplied result data (`options`: `variables`, `delay`, `error`, `maxUsageCount`).
-- `MockResult.mockOperation(query, options?)` / `MockResult.mockOperationVariants(...)`: Same, but resolve the result data from the `MockResult` graph (via `dataForOperation`) so the query's selection set selects the mocks — no data argument needed.
-- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `relations`, `scenario`, `resolveType`, `addTypename`, `stableIds`, `idPrefix`, `qa`.
+- `MockResult.dataForOperation(document, variables?, matchArguments?)`: Execute a query/mutation against the graph and return data shaped to the selection set (lists, fragments, and interface/union fields supported). Return type inferred from a `TypedDocumentNode`.
+- `MockResult.toRequestHandler(options?)`: A handler answering any operation from the graph with no registration — memoized per document+variables, with ordered `overrides` (`data`/`errors`/`networkError`/`loading`/`delay`/`once`), a `calls` spy list and `reset()`.
+- `mockLink(mocksOrHandler, options?)` from `@vantreeseba/graphql-mocks/apollo`: wrap a graph or handler in an `ApolloLink`.
+- `mockScenarios(base?, target?)`: the `default` / `loading` / `errored` trio of `MockHandlerOptions`, optionally narrowed to specific operations.
+- `MockResult.mockOperationsFrom(module, options?)`: map a codegen document module's export names to lazily built variants.
+- `MockResult.ids(type)` / `.at(type, index)` / `.byId(type, id)`: address pooled items directly.
+- `paginate(items, args)` / `searchItems(items, term, fields?)`: the array primitives the argument engine uses, exported for wrapper types it cannot reach.
+- `mockOperation(query, data, options?)` / `mockOperationVariants(...)`: Build Apollo `MockedProvider` `MockedResponse` entries from supplied result data (`options`: `variables`, `delay`, `error`, `maxUsageCount`). `data` may instead be a `(variables) => data` resolver, producing a `DynamicMockedResponse`.
+- `MockResult.mockOperation(query, options?)` / `MockResult.mockOperationVariants(...)`: Same, but resolve the result data from the `MockResult` graph (via `dataForOperation`) so the query's selection set selects the mocks — no data argument needed. Adds `dynamic`, `transform` and a per-call `matchArguments`.
+- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `relations`, `scenario`, `resolveType`, `addTypename`, `stableIds`, `idPrefix`, `qa`, `listSize`, `matchArguments`.
 - `relations` option (`RelationsConfig`): shapes relationship fields after every pool exists — a number, a `{ min, max }` range, `null` (empty), `'all'` (the whole target pool), or `(ctx) => value` picking the related objects from `ctx.pool`. Resolved `[type][field]` → `[type]._default` → `_default` → the flat form, and it reaches root fields through the operation type (`{ Query: { users: 3 } }`). Beats `nullChance` and the QA `lists` profile; `overrides` still beats it. Pools grow to meet demand. Config errors throw (`TypeError` for an unknown/ineligible field or an emptied non-null singular field, `RangeError` for a bad size). `{ _reciprocal: true }` opts into writing each reference back into its inverse field.
 - `defineScenarios(map)` / `composeScenarios(...scenarios)`: a scenario is a named partial `BuildMocksOptions` (plus `description`), passed as `scenario: Scenario | Scenario[]` and applied left to right with the explicit options last. Maps merge key by key (`count` per type, `overrides`/`relations` two levels deep, `scalars` by name, `qa` per dimension); everything else is last-wins. `defineScenarios` is an identity function — add `satisfies ScenarioMap<SchemaTypeMap>` for schema-checked keys.
 - `buildMatrix(schema, options?)`: crosses a `scenarios` map with `qaPresets` and returns a flat `MatrixCell[]` (`name`, `scenario`, `qa`, `options`, `mocks`). Either axis may be omitted. Each cell gets its own faker seeded from `seed` (`seedPerCell` opts out), and with `stableIds` each cell's ids are prefixed with a slug of its name unless `idPrefix` is set. `buildQaSets` is the QA-only shorthand over the same engine.
@@ -48,6 +54,9 @@ Key facts:
 - Relationship shaping: `buildMocks(schema, { relations: { User: { todos: 0, posts: { min: 1, max: 2 } }, Post: { comments: 'all', author: ({ pool }) => pool[0] }, Query: { users: 3 } } })`.
 - Named scenarios: `const scenarios = defineScenarios({ newUser: { count: { User: 1 }, relations: { User: { todos: null } }, overrides: { User: { loginCount: () => 0 } } } }); buildMocks(schema, { scenario: scenarios.newUser, seed: 42 })`.
 - Scenario × QA matrix: `buildMatrix(schema, { scenarios, qaPresets: [false, 'longText', 'hugeLists'], seed: 42 })` → one cell per combination, named `"newUser × longText"`.
+- Argument matching (opt-in): `buildMocks(schema, { matchArguments: true })` — `user(id: "User-2")`, `users(skip: 10, limit: 5)` and `posts(titleContains: "x")` select data; unmatched lists return `[]`, unmatched singulars fall back to a random pick, and auto-filled variables are ignored.
+- Any-operation transport: `new ApolloClient({ cache, link: mockLink(mocks) })`, or `await mocks.toRequestHandler()({ query, variables })`.
+- Story states: `const s = mockScenarios({}, 'UserById'); mocks.toRequestHandler(s.loading)`.
 
 ## Optional
 
