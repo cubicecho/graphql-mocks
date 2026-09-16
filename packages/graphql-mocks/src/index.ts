@@ -20,8 +20,24 @@ export type {
   ListSizeConfig,
   MockHelpers,
   MockResult,
+  OverrideContext,
   OverridesConfig,
+  QaConfig,
+  QaDateProfile,
+  QaListProfile,
+  QaNullProfile,
+  QaNumberProfile,
+  QaOption,
+  QaProfileName,
+  QaTextProfile,
+  RelationContext,
+  RelationFn,
+  RelationsConfig,
+  RelationSize,
+  RelationSpec,
   ScalarMocker,
+  Scenario,
+  ScenarioMap,
 } from './types.js';
 export { defaultScalarMockers, resolveScalarMocker } from './scalarMockers.js';
 export { createRequestHandler } from './requestHandler.js';
@@ -35,6 +51,13 @@ export type {
   MockRequest,
   MockRequestHandler,
 } from './requestHandler.js';
-export { mockScenarios } from './scenarios.js';
-export type { MockScenarios, ScenarioTarget } from './scenarios.js';
+export { mockScenarios } from './mockScenarios.js';
+export type { MockScenarios, ScenarioTarget } from './mockScenarios.js';
 export type { OperationMocks, OperationModule } from './operationsFrom.js';
+export { DEFAULT_HUGE_LIST_SIZE, QA_PROFILE_NAMES, QA_PROFILES, qaScalarMockers } from './qa.js';
+export { buildQaSets } from './qaSets.js';
+export type { BuildQaSetsOptions, QaSet } from './qaSets.js';
+export { buildMatrix } from './matrix.js';
+export type { BuildMatrixOptions, MatrixCell, MatrixCellInfo } from './matrix.js';
+export { composeScenarios, defineScenarios } from './scenarios.js';
+export { resolveRelation } from './relations.js';

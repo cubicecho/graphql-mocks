@@ -8,7 +8,7 @@ import {
 } from 'graphql';
 import type { ArgMatchingOptions } from './argMatching.js';
 import { resolveOperationResult } from './executeOperation.js';
-import type { BuildMocksOptions } from './types.js';
+import type { ResolvedOptions } from './resolveOptions.js';
 
 /** What the handler was asked for — the spy record and the input to every override matcher. */
 export interface MockOperationInfo {
@@ -104,8 +104,9 @@ export interface MockRequestHandler {
 export interface RequestHandlerDeps {
   schema: GraphQLSchema;
   pool: Record<string, Record<string, unknown>[]>;
-  faker: Faker;
-  options: BuildMocksOptions;
+  /** The options the pool was built from, already resolved — never re-resolved here, since
+   * that would reseed the faker the graph was drawn with. */
+  resolved: ResolvedOptions;
 }
 
 /** A promise that never settles, and — unlike a very long delay — schedules no timer. */
@@ -165,8 +166,7 @@ export function createRequestHandler(
     const { data, errors } = resolveOperationResult(
       deps.schema,
       deps.pool,
-      deps.faker,
-      deps.options,
+      deps.resolved,
       info.document,
       info.variables,
       options.matchArguments,
@@ -221,7 +221,7 @@ export function createRequestHandler(
 
     if (override?.loading) return neverSettles();
 
-    const wait = sleep(delayMs(override?.delay ?? options.delay, deps.faker));
+    const wait = sleep(delayMs(override?.delay ?? options.delay, deps.resolved.faker));
 
     if (override?.networkError !== undefined) {
       const error =

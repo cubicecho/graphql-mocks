@@ -197,7 +197,9 @@ describe('buildGraph', () => {
     const result = buildGraph(s, { faker, seed: 1, resolveType: () => 'NonExistent' });
     const foo = result.Foo?.[0] as Record<string, unknown>;
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('NonExistent'));
-    expect(foo.node).toBeUndefined();
+    // Null, not undefined: an empty pool resolves the same way for abstract and object
+    // fields, and `undefined` is not a value GraphQL can serialize.
+    expect(foo.node).toBeNull();
     warnSpy.mockRestore();
   });
 
@@ -264,6 +266,22 @@ describe('buildGraph', () => {
     for (const user of (a.User ?? []) as Record<string, unknown>[]) {
       expect(typeof user.name).toBe('string');
     }
+  });
+
+  it('numbers override context by the instance index, matching stableIds', () => {
+    const result = buildGraph(schema, {
+      faker,
+      seed: 1,
+      count: 3,
+      stableIds: true,
+      overrides: {
+        User: { loginCount: (f, { index }) => (index === 0 ? 0 : f.number.int(500)) },
+      },
+    });
+    const users = (result.User ?? []) as Record<string, unknown>[];
+    expect(users.map((u) => u.id)).toEqual(['User-0', 'User-1', 'User-2']);
+    expect(users[0]?.loginCount).toBe(0);
+    expect(users[1]?.loginCount).not.toBe(0);
   });
 });
 

@@ -15,25 +15,32 @@ import {
   variablesForData,
 } from './apolloMocks.js';
 import { resolveOperationData } from './executeOperation.js';
-import {
-  type ListSizeRange,
-  OPERATION_TYPE_NAMES,
-  resolveCount,
-  resolveFaker,
-  resolveListSize,
-} from './helpers.js';
+import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
   type OperationMocks,
   type OperationModule,
   buildOperationMocks,
 } from './operationsFrom.js';
+import { qaListLength } from './qa.js';
+import {
+  isReciprocal,
+  pickRelated,
+  relationBounds,
+  relationDemand,
+  resolveRelation,
+  validateRelations,
+} from './relations.js';
 import {
   type MockHandlerOptions,
   type MockRequestHandler,
   createRequestHandler,
 } from './requestHandler.js';
+import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
-import type { BuildMocksOptions, MockResult } from './types.js';
+import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
+
+/** A singular field draws exactly one object; the QA list profile does not apply to it. */
+const SINGULAR_BOUNDS = { min: 1, max: 1 };
 
 // The public builders are overloaded on static vs. resolver-function data; the graph-bound
 // wrappers decide which applies at runtime, so they call through an unoverloaded view.
@@ -48,39 +55,151 @@ const looseMockOperationVariants = buildMockOperationVariants as (
   options?: MockOperationOptions,
 ) => unknown;
 
-/** Pick a random element from an array; returns undefined if empty. */
-function pickRandom<T>(arr: T[], faker: Faker): T | undefined {
-  return arr.length === 0 ? undefined : faker.helpers.arrayElement(arr);
+/**
+ * Everything about one relationship field that doesn't vary by instance, resolved once per
+ * type rather than once per instance × field. Also dedupes each warning to one per site.
+ */
+interface FieldPlan {
+  fieldName: string;
+  isRequired: boolean;
+  isList: boolean;
+  /** The user's `relations` entry, or undefined for "no opinion". */
+  spec: RelationSpec | undefined;
+  /** How many to draw, or null for none. Unused when `spec` is a function. */
+  bounds: { min: number; max: number } | null;
+  /** The pool to draw from, or undefined when the field can only ever be null. */
+  targetPool: Record<string, unknown>[] | undefined;
+  /** Name of the type this field points at, after resolving abstract types. */
+  targetName: string;
+  /** Set once a {@link RelationFn} has been warned about, to keep warnings one per site. */
+  fnWarned?: boolean;
 }
 
 /**
- * Pick a random subset of an array, without replacement. The size comes from `listSize`
- * (default 1–5) and is capped by the pool, since items are drawn without replacement.
+ * Keep a {@link RelationFn}'s return value executable. A function can't be checked ahead of
+ * time the way a literal spec can, so a non-null field it empties is repaired here — the
+ * engine never emits a graph that would null a whole query at execution time.
  */
-function pickSubset<T>(arr: T[], faker: Faker, size: ListSizeRange): T[] {
-  if (arr.length === 0 || size.max === 0) return [];
-  return faker.helpers.arrayElements(arr, {
-    min: Math.min(size.min, arr.length),
-    max: Math.min(size.max, arr.length),
-  });
+function coerceFnValue(
+  value: unknown,
+  plan: FieldPlan,
+  pool: Record<string, unknown>[],
+  faker: Faker,
+  site: string,
+): unknown {
+  if (plan.isList) return value === undefined || (value === null && plan.isRequired) ? [] : value;
+  if (value != null || !plan.isRequired || pool.length === 0) return value;
+
+  if (!plan.fnWarned) {
+    plan.fnWarned = true;
+    console.warn(
+      `[graphql-mocks] relations: the function for "${site}" returned nothing for a non-null field — using a pooled object instead`,
+    );
+  }
+  return pickRelated(pool, SINGULAR_BOUNDS, false, faker);
+}
+
+/** Plan every non-scalar field of `objectType`, resolving abstract types to a concrete pool. */
+function planRelationFields(
+  objectType: GraphQLObjectType,
+  pool: Record<string, Record<string, unknown>[]>,
+  resolved: ResolvedOptions,
+): FieldPlan[] {
+  const plans: FieldPlan[] = [];
+  const overrides = resolved.overrides[objectType.name] ?? {};
+
+  /** Finish a plan against the pool it draws from, warning once per site about the result. */
+  const commit = (
+    plan: Omit<FieldPlan, 'targetPool' | 'targetName'>,
+    targetPool: Record<string, unknown>[] | undefined,
+    targetName: string,
+  ) => {
+    const emptied = plan.bounds === null || plan.bounds.max === 0;
+    // A catch-all can't empty a non-null singular field — `[]` satisfies `[Todo!]!`, but
+    // `null` satisfies nothing. An explicit entry that tries already threw in validation.
+    const bounds = plan.isRequired && !plan.isList && emptied ? SINGULAR_BOUNDS : plan.bounds;
+
+    // Asking for more than exists is silent otherwise: the draw is without replacement, so
+    // the list simply comes back short. `'all'` and functions size themselves, so they can't.
+    if (
+      plan.isList &&
+      plan.spec !== undefined &&
+      plan.spec !== 'all' &&
+      typeof plan.spec !== 'function' &&
+      targetPool !== undefined &&
+      bounds !== null &&
+      bounds.max > targetPool.length
+    ) {
+      console.warn(
+        `[graphql-mocks] relations: "${objectType.name}.${plan.fieldName}" asks for up to ${bounds.max} but the "${targetName}" pool holds ${targetPool.length} — raise count.${targetName} to get more`,
+      );
+    }
+
+    // An empty pool nulls a non-null field just as surely, and that nulls the whole query.
+    if (
+      plan.isRequired &&
+      !plan.isList &&
+      targetPool?.length === 0 &&
+      overrides[plan.fieldName] === undefined
+    ) {
+      console.warn(
+        `[graphql-mocks] Field "${objectType.name}.${plan.fieldName}" is non-null but the "${targetName}" pool is empty — the field will be null, which nulls any query selecting it`,
+      );
+    }
+
+    plans.push({ ...plan, bounds, targetPool, targetName });
+  };
+
+  for (const [fieldName, field] of Object.entries(objectType.getFields())) {
+    const { namedType, isRequired, isList } = unwrapType(field.type);
+    // Scalars and enums were already generated in phase 1.
+    if (isScalarType(namedType) || isEnumType(namedType)) continue;
+
+    const spec = resolveRelation(objectType.name, fieldName, resolved.relations);
+    const fallback = isList ? qaListLength(resolved.qa, resolved.listSize) : SINGULAR_BOUNDS;
+    const plan = { fieldName, isRequired, isList, spec, bounds: relationBounds(spec, fallback) };
+
+    if (isObjectType(namedType)) {
+      commit(plan, pool[namedType.name] ?? [], namedType.name);
+      continue;
+    }
+
+    if (isInterfaceType(namedType) || isUnionType(namedType)) {
+      if (!resolved.resolveType) {
+        console.warn(
+          `[graphql-mocks] Field "${objectType.name}.${fieldName}" returns abstract type "${namedType.name}" — provide resolveType option to mock it`,
+        );
+        commit(plan, undefined, namedType.name);
+        continue;
+      }
+      const concreteName = resolved.resolveType(namedType.name);
+      if (!(concreteName in pool)) {
+        console.warn(
+          `[graphql-mocks] resolveType returned unknown type "${concreteName}" for "${namedType.name}" — field will be null/empty`,
+        );
+      }
+      commit(plan, pool[concreteName] ?? [], concreteName);
+    }
+  }
+
+  return plans;
 }
 
 function createMockResult(
   pool: Record<string, unknown[]>,
-  faker: Faker,
   schema: GraphQLSchema,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
 ): MockResult {
+  const { faker } = resolved;
   const dataForOperation = (
-    document: Parameters<typeof resolveOperationData>[4],
+    document: Parameters<typeof resolveOperationData>[3],
     variables?: Record<string, unknown>,
-    matchArguments?: Parameters<typeof resolveOperationData>[6],
+    matchArguments?: Parameters<typeof resolveOperationData>[5],
   ) =>
     resolveOperationData(
       schema,
       pool as Record<string, Record<string, unknown>[]>,
-      faker,
-      options,
+      resolved,
       document,
       variables,
       matchArguments,
@@ -146,7 +265,7 @@ function createMockResult(
     },
     toRequestHandler(handlerOptions: MockHandlerOptions = {}): MockRequestHandler {
       return createRequestHandler(
-        { schema, pool: pool as Record<string, Record<string, unknown>[]>, faker, options },
+        { schema, pool: pool as Record<string, Record<string, unknown>[]>, resolved },
         handlerOptions,
       );
     },
@@ -180,9 +299,82 @@ function createMockResult(
   return Object.assign({}, pool, helpers) as MockResult;
 }
 
+/**
+ * The field on `targetType` that points back at `ownerName`, or why there isn't one. The
+ * inverse has to be unique to be unambiguous — two fields of the same type give no way to
+ * know which one owns the relationship.
+ */
+function findInverseField(
+  targetType: GraphQLObjectType,
+  ownerName: string,
+): { fieldName: string; isList: boolean } | 'ambiguous' | undefined {
+  const matches = Object.entries(targetType.getFields())
+    .map(([fieldName, field]) => ({ fieldName, ...unwrapType(field.type) }))
+    .filter(({ namedType }) => namedType.name === ownerName);
+
+  if (matches.length > 1) return 'ambiguous';
+  const [match] = matches;
+  return match && { fieldName: match.fieldName, isList: match.isList };
+}
+
+/**
+ * Mirror every wired relationship back onto its inverse field, so `user.todos[i].user` is
+ * that same user. Opt-in via `relations: { _reciprocal: true }`, and inherently lossy in one
+ * direction: a Todo in two users' lists can only point at one owner, so the last write wins.
+ */
+function wireReciprocal(
+  schema: GraphQLSchema,
+  objectTypes: GraphQLObjectType[],
+  pool: Record<string, Record<string, unknown>[]>,
+  plansByType: Map<string, FieldPlan[]>,
+): void {
+  for (const objectType of objectTypes) {
+    for (const plan of plansByType.get(objectType.name) ?? []) {
+      const targetType = schema.getType(plan.targetName);
+      if (!isObjectType(targetType)) continue;
+
+      const site = `${objectType.name}.${plan.fieldName}`;
+      const inverse = findInverseField(targetType, objectType.name);
+      if (inverse === undefined) {
+        console.warn(
+          `[graphql-mocks] relations: "${site}" has no inverse field on "${plan.targetName}" — nothing to mirror it onto`,
+        );
+        continue;
+      }
+      if (inverse === 'ambiguous') {
+        console.warn(
+          `[graphql-mocks] relations: "${plan.targetName}" has more than one field of type "${objectType.name}", so the inverse of "${site}" is ambiguous — skipped`,
+        );
+        continue;
+      }
+
+      for (const instance of pool[objectType.name] ?? []) {
+        const value = instance[plan.fieldName];
+        const related = (Array.isArray(value) ? value : [value]).filter(
+          (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
+        );
+
+        for (const target of related) {
+          if (!inverse.isList) {
+            target[inverse.fieldName] = instance;
+            continue;
+          }
+          const existing = target[inverse.fieldName];
+          if (!Array.isArray(existing)) {
+            target[inverse.fieldName] = [instance];
+          } else if (!existing.includes(instance)) {
+            existing.push(instance);
+          }
+        }
+      }
+    }
+  }
+}
+
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
-  const faker = resolveFaker(options);
-  const listSize = resolveListSize(options.listSize);
+  const resolved = resolveOptions(options);
+  validateRelations(schema, resolved.relations);
+  const { faker, qa, nullChance } = resolved;
 
   // Collect all non-operation, non-builtin object types
   const typeMap = schema.getTypeMap();
@@ -192,78 +384,85 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   );
 
   // Phase 1: generate N instances per type with scalar/enum fields only
-  const addTypename = options.addTypename ?? true;
-  const stableIds = options.stableIds ?? false;
+  const { addTypename, stableIds, idPrefix } = resolved;
+  const demand = relationDemand(schema, resolved.relations, resolved.resolveType);
   const pool: Record<string, Record<string, unknown>[]> = {};
   for (const objectType of objectTypes) {
-    const count = resolveCount(objectType.name, options.count);
-    const idOverridden = options.overrides?.[objectType.name]?.id !== undefined;
+    // `defaultCount` already accounts for a `huge` list profile needing pools at least as
+    // large as the target length, since lists are sampled without replacement; `demand` does
+    // the same for the sizes `relations` asks for. An explicit `count` still wins over both.
+    const count = resolveCount(
+      objectType.name,
+      resolved.count,
+      Math.max(resolved.defaultCount, demand[objectType.name] ?? 0),
+    );
+    const idOverridden = resolved.overrides[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
-      const instance = mockTypeScalars(objectType, faker, options);
+      const instance = mockTypeScalars(objectType, resolved, index);
       if (addTypename) instance.__typename = objectType.name;
       if (stableIds && !idOverridden && 'id' in instance) {
-        instance.id = `${objectType.name}-${index}`;
+        instance.id = `${idPrefix}${objectType.name}-${index}`;
       }
       return instance;
     });
   }
 
   // Phase 2: wire relationship fields from the pool
+  const plansByType = new Map<string, FieldPlan[]>();
   for (const objectType of objectTypes) {
     const instances = pool[objectType.name] ?? [];
-    const fields = objectType.getFields();
-    const nullChance = options.nullChance ?? 0;
+    if (instances.length === 0) continue;
+    const plans = planRelationFields(objectType, pool, resolved);
+    plansByType.set(objectType.name, plans);
 
-    for (const instance of instances) {
-      for (const [fieldName, field] of Object.entries(fields)) {
-        // Skip fields already set in phase 1 or via overrides
+    for (const [index, instance] of instances.entries()) {
+      for (const plan of plans) {
+        const { fieldName, isList, spec, targetPool } = plan;
+        // Phase 1 and `overrides` set the field already, and both outrank relations.
         if (fieldName in instance) continue;
 
-        const { namedType, isRequired, isList } = unwrapType(field.type);
-
-        // Scalar/enum already handled in phase 1
-        if (isScalarType(namedType) || isEnumType(namedType)) continue;
-
-        // Apply null chance for nullable relationship fields
-        if (!isRequired && nullChance > 0 && faker.datatype.boolean({ probability: nullChance })) {
+        // A `relations` entry is the more specific lever, so it takes the field outright
+        // instead of rolling against the global null chance.
+        if (
+          spec === undefined &&
+          !plan.isRequired &&
+          nullChance > 0 &&
+          faker.datatype.boolean({ probability: nullChance })
+        ) {
           instance[fieldName] = null;
           continue;
         }
 
-        if (isObjectType(namedType)) {
-          const relatedPool = pool[namedType.name] ?? [];
-          if (relatedPool.length === 0) {
-            instance[fieldName] = isList ? [] : null;
-            continue;
-          }
-          instance[fieldName] = isList
-            ? pickSubset(relatedPool, faker, listSize)
-            : pickRandom(relatedPool, faker);
+        // An abstract field with no way to resolve it — already warned once per site.
+        if (targetPool === undefined) {
+          instance[fieldName] = null;
           continue;
         }
 
-        if (isInterfaceType(namedType) || isUnionType(namedType)) {
-          if (!options.resolveType) {
-            console.warn(
-              `[graphql-mocks] Field "${objectType.name}.${fieldName}" returns abstract type "${namedType.name}" — provide resolveType option to mock it`,
-            );
-            instance[fieldName] = null;
-            continue;
-          }
-          const concreteName = options.resolveType(namedType.name);
-          if (!(concreteName in pool)) {
-            console.warn(
-              `[graphql-mocks] resolveType returned unknown type "${concreteName}" for "${namedType.name}" — field will be null/empty`,
-            );
-          }
-          const concretePool = pool[concreteName] ?? [];
-          instance[fieldName] = isList
-            ? pickSubset(concretePool, faker, listSize)
-            : pickRandom(concretePool, faker);
+        if (typeof spec !== 'function') {
+          instance[fieldName] = pickRelated(targetPool, plan.bounds, isList, faker);
+          continue;
         }
+
+        const value = spec({
+          pool: targetPool,
+          faker,
+          index,
+          instance,
+          typeName: objectType.name,
+          fieldName,
+          isList,
+        });
+        const site = `${objectType.name}.${fieldName}`;
+        instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }
   }
 
-  return createMockResult(pool as Record<string, unknown[]>, faker, schema, options);
+  // Phase 3: mirror relationships onto their inverse fields, when asked to.
+  if (isReciprocal(resolved.relations)) {
+    wireReciprocal(schema, objectTypes, pool, plansByType);
+  }
+
+  return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }

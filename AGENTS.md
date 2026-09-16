@@ -41,14 +41,20 @@ packages/
       scalarMockers.ts        — default scalar → faker mapping
       typeMocker.ts           — per-type field mock generator
       graphBuilder.ts         — assembles cross-type relationships into a graph
-      executeOperation.ts     — resolves a document against the graph
+      executeOperation.ts     — runs an operation against the graph (dataForOperation)
       argMatching.ts          — opt-in interpretation of field arguments
       collection.ts           — paginate/searchItems array primitives
       apolloMocks.ts          — Apollo MockedProvider mock builders (mockOperation)
       requestHandler.ts       — graph-backed handler answering any operation
-      scenarios.ts            — default/loading/errored handler options
+      mockScenarios.ts        — default/loading/errored handler options
       operationsFrom.ts       — variants keyed by a document module's exports
       apollo/index.ts         — ./apollo subpath: mockLink (optional @apollo/client peer)
+      qa.ts                   — QA mode: presets, weird-value corpora, resolution helpers
+      qaSets.ts               — buildQaSets(): one mock pool per QA preset
+      resolveOptions.ts       — folds every option into the one shape the generator consumes
+      relations.ts            — relations config: lookup, sizing, validation, pool demand
+      scenarios.ts            — scenario merge, defineScenarios(), composeScenarios()
+      matrix.ts               — buildMatrix(): one pool per scenario × QA-preset cell
       helpers.ts              — utility functions
       types.ts                — all public TypeScript types
       test/schema.ts          — test GraphQL schema (rich, with custom scalars)
@@ -68,7 +74,7 @@ package.json                  — workspaces root (private, not published)
 - Unknown scalars fall back to `faker.lorem.word()` and emit `console.warn`
 - Custom scalar names (e.g. `CityName`, `EmailAddress`) map to semantic faker calls
 - Nullable fields have a configurable chance of being `null` (default 0)
-- Scalar list fields generate 1–3 items; relationship list fields generate 1–5 items
+- Scalar list fields generate 1–3 items; relationship list fields generate 1–5 items, unless `relations` says otherwise
 - Circular references are resolved: back-references point to already-generated objects, not new ones
 - User scalar overrides merge over the default map (user wins)
 - Coverage target: ≥90% lines/branches (runtime); ≥95% (codegen plugin)
