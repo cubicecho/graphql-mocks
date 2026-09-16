@@ -68,6 +68,47 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/** Where a derive is firing, plus the tools the function may need. */
+export interface DeriveContext {
+  /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
+  index: number;
+  typeName: string;
+  fieldName: string;
+  /** The same seeded faker the generator drew with, so a derive stays deterministic. */
+  faker: Faker;
+}
+
+/**
+ * Compute a field from the object that owns it. Unlike {@link FieldOverrideFn}, which fires
+ * while the instance is still being built, a derive runs once the instance is complete and
+ * every relationship is wired — so `self` carries the type's scalars, its relationship fields,
+ * and any reciprocal back-references:
+ *
+ * ```ts
+ * derive: { User: { fullName: (self) => `${self.firstName} ${self.lastName}` } }
+ * ```
+ *
+ * @typeParam TSelf - The owning object's type. @typeParam T - The field's value type.
+ */
+export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = (
+  self: TSelf,
+  ctx: DeriveContext,
+) => T;
+
+// Derives for a single type, degrading to a loose record when the shape is unknown, the same
+// way `FieldOverrides` does.
+type FieldDerives<T> = unknown extends T
+  ? Record<string, FieldDeriveFn>
+  : { [F in keyof T]?: FieldDeriveFn<T, T[F]> };
+
+/**
+ * Per-type, per-field derive map. With a `TTypes` map, type and field names autocomplete,
+ * `self` is the owning type, and each derive's return type is bound to the field's type.
+ */
+export type DeriveConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: FieldDerives<TTypes[K]>;
+};
+
 /**
  * How many related objects a relationship field gets. A number is an exact size, a
  * `{ min, max }` range picks a random size in between, `'all'` takes the whole target pool,
@@ -254,6 +295,29 @@ export interface BuildMocksOptions<
    */
   relations?: RelationsConfig<TTypes>;
   /**
+   * Per-type, per-field functions that compute a field **from the finished object**. They run
+   * last — after scalars, after `overrides`, after relationships are wired and mirrored — so
+   * every sibling and every related object is already there to read:
+   *
+   * ```ts
+   * buildMocks(schema, {
+   *   derive: {
+   *     User: { fullName: (self) => `${self.firstName} ${self.lastName}` },
+   *     ProductSearchResult: { totalCount: (self) => self.results.length },
+   *   },
+   * });
+   * ```
+   *
+   * This is the lever for any field that must agree with its siblings — a total over a list,
+   * a name assembled from its parts, a balance that is a difference of two others. `overrides`
+   * structurally cannot do it: it fires per field while the instance is half-built, so a derive
+   * always wins over an `overrides` entry for the same field. Within one type, derives run in
+   * the order they are written, so one may read another's result.
+   *
+   * Applies to pooled instances, which is what every operation draws from.
+   */
+  derive?: DeriveConfig<TTypes>;
+  /**
    * One or more {@link Scenario} layers to build on. Applied left to right, with these
    * options merged last — so an explicit `count` here always wins over a scenario's.
    *
@@ -261,7 +325,7 @@ export interface BuildMocksOptions<
    * buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], seed: 42 });
    * ```
    *
-   * Maps merge key by key (`count`, `overrides`, `relations`, `scalars`, and the QA
+   * Maps merge key by key (`count`, `overrides`, `derive`, `relations`, `scalars`, and the QA
    * dimensions); everything else is last-one-wins.
    */
   scenario?: Scenario<TTypes> | Scenario<TTypes>[];

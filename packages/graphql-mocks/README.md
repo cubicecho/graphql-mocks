@@ -87,6 +87,27 @@ const mocks = buildMocks(schema, {
 });
 ```
 
+### Derived fields
+
+An override fires while the instance is half-built, so it cannot see its siblings. Any field whose value is a function of the rest of the object — a total over a list, a name assembled from its parts, a balance that is a difference of two others — belongs in `derive` instead:
+
+```ts
+const mocks = buildMocks(schema, {
+  relations: { ProductSearchResult: { results: 3 } },
+  derive: {
+    ProductSearchResult: { totalCount: (self) => self.results.length },
+    User: { fullName: (self) => `${self.firstName} ${self.lastName}` },
+    StockLevel: { available: (self) => self.onHand - self.reserved },
+  },
+});
+```
+
+`derive` runs last — after scalars, after `overrides`, after relationships are wired and mirrored — so `self` is the finished object: every scalar, every relationship field, and every reciprocal back-reference is already there to read. Because it runs last it also **wins** over an `overrides` entry for the same field.
+
+The second argument is `{ index, typeName, fieldName, faker }`, with the same seeded faker the generator drew with. Within one type, derives run in the order they are written, so one may read another's result. Derives apply to pooled instances, which is what every operation resolves from — so `dataForOperation` and every Apollo mock see the derived values too.
+
+Merging follows the same two-level rule as `overrides`: a scenario layer and the build options combine per type and per field.
+
 ### `__typename` and stable ids
 
 Every object gets a `__typename` by default (the Apollo cache needs it). Turn it off with `addTypename: false`. Enable `stableIds` to give each object with an `id` field a readable, collision-free `TypeName-<index>` id instead of a random scalar:
@@ -739,6 +760,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `nullChance` | `number` | `0` | Probability (0–1) nullable fields are `null` |
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
 | `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
+| `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |

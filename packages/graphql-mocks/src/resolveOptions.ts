@@ -6,6 +6,7 @@ import { applyScenarios } from './scenarios.js';
 import type {
   BuildMocksOptions,
   CountConfig,
+  DeriveConfig,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
@@ -48,6 +49,8 @@ export interface ResolvedOptions {
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
+  /** Field functions run after the graph is complete, so they see the finished object. */
+  derive: DeriveConfig | undefined;
   relations: RelationsConfig | undefined;
   resolveType: ((abstractTypeName: string) => string) | undefined;
   qa: ResolvedQa | undefined;
@@ -74,6 +77,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    derive: options.derive,
     relations: options.relations,
     resolveType: options.resolveType,
     qa,
