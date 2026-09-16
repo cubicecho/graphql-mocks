@@ -1,10 +1,15 @@
-import { ApolloClient, InMemoryCache, gql } from '@apollo/client';
+import { ApolloClient, InMemoryCache, type TypedDocumentNode, gql } from '@apollo/client';
 import { describe, expect, it, vi } from 'vitest';
 import { buildMocks } from '../mockSchema.js';
 import { schema } from '../test/schema.js';
 import { mockLink } from './index.js';
 
-const UsersQuery = gql`
+interface UserFields {
+  id: string;
+  name: string;
+}
+
+const UsersQuery: TypedDocumentNode<{ users: UserFields[] }, Record<string, never>> = gql`
   query Users {
     users {
       id
@@ -13,7 +18,7 @@ const UsersQuery = gql`
   }
 `;
 
-const UserByIdQuery = gql`
+const UserByIdQuery: TypedDocumentNode<{ user: UserFields }, { id: string }> = gql`
   query UserById($id: ID!) {
     user(id: $id) {
       id
@@ -31,14 +36,14 @@ describe('mockLink', () => {
   it('answers a query through a real ApolloClient', async () => {
     const client = clientFor(mockLink(graph()));
     const result = await client.query({ query: UsersQuery });
-    expect(result.data.users.length).toBeGreaterThan(0);
-    expect(result.data.users[0]).toHaveProperty('name');
+    expect(result.data?.users.length).toBeGreaterThan(0);
+    expect(result.data?.users[0]).toHaveProperty('name');
   });
 
   it('answers a second, unregistered operation from the same link', async () => {
     const client = clientFor(mockLink(graph(), { matchArguments: true }));
     const result = await client.query({ query: UserByIdQuery, variables: { id: 'User-2' } });
-    expect(result.data.user.id).toBe('User-2');
+    expect(result.data?.user.id).toBe('User-2');
   });
 
   it('surfaces an override GraphQL error', async () => {

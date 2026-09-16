@@ -44,12 +44,15 @@ export type MockOverrideMatcher = string | DocumentNode | ((info: MockOperationI
 /** An error to return, as a message or a formatted GraphQL error. */
 export type MockErrorInput = string | GraphQLFormattedError;
 
-export interface MockOverride<TData = unknown> {
+export interface MockOverride<TData extends Record<string, unknown> = Record<string, unknown>> {
   /** Which operations this entry answers. Omit to match every operation. */
   match?: MockOverrideMatcher;
   /**
    * Replacement data: a value, or a function receiving the operation and the data the graph
    * resolved for it (so an override can patch rather than replace).
+   *
+   * `TData` defaults to a plain object rather than `unknown` because `unknown` would absorb
+   * the function arm of the union, leaving a `data` callback's parameters implicitly `any`.
    */
   data?: TData | ((info: MockOperationInfo, graphData: unknown) => TData);
   /** Resolve with GraphQL errors — `{ data: null, errors }`, the GraphQL error path. */
