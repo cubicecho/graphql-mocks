@@ -41,8 +41,8 @@ export const schema = buildSchema(`
     score: Float
     loginCount: Int!
     createdAt: DateTime!
-    todos: [Todo!]!
-    posts: [Post!]!
+    todos(priority: Priority, first: Int, offset: Int): [Todo!]!
+    posts(status: PostStatus, first: Int): [Post!]!
   }
 
   type Todo {
@@ -77,11 +77,25 @@ export const schema = buildSchema(`
     post: Post!
   }
 
+  input CreateTodoInput {
+    title: String!
+    priority: Priority
+    userId: ID
+  }
+
   type Query {
     user(id: ID!): User
-    users: [User!]!
-    todos: [Todo!]!
-    posts: [Post!]!
+    users(skip: Int, limit: Int, search: String, isActive: Boolean): [User!]!
+    usersByIds(ids: [ID!]!): [User!]!
+    todos(priority: Priority, first: Int, offset: Int): [Todo!]!
+    posts(status: PostStatus, titleContains: String, take: Int): [Post!]!
+    postBySlug(slug: Slug!): Post
     search(query: String!): [SearchResult!]!
+  }
+
+  type Mutation {
+    createTodo(input: CreateTodoInput!): Todo!
+    updateUser(id: ID!, name: String): User!
+    deleteTodo(id: ID!): Boolean!
   }
 `);

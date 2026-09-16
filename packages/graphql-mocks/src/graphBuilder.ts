@@ -51,6 +51,7 @@ function createMockResult(
   const dataForOperation = (
     document: Parameters<typeof resolveOperationData>[4],
     variables?: Record<string, unknown>,
+    matchArguments?: Parameters<typeof resolveOperationData>[6],
   ) =>
     resolveOperationData(
       schema,
@@ -59,6 +60,7 @@ function createMockResult(
       options,
       document,
       variables,
+      matchArguments,
     );
 
   const helpers = {

@@ -2,6 +2,7 @@ import type { Faker } from '@faker-js/faker';
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import type { DocumentNode } from 'graphql';
 import type { MockOperationOptions, MockOperationVariants, MockedResponse } from './apolloMocks.js';
+import type { ArgMatchingOptions } from './argMatching.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
 
@@ -86,6 +87,24 @@ export interface BuildMocksOptions<
    */
   resolveType?: (abstractTypeName: string) => keyof TTypes & string;
   /**
+   * Interpret operation arguments when resolving fields instead of ignoring them: match pooled
+   * items by scalar equality, apply `skip`/`limit` paging to list fields, and apply substring
+   * filters from search-style arguments. Pass an {@link ArgMatchingOptions} object to tune it.
+   *
+   * Off by default, so existing output is unchanged. Turning it on is safe for operations that
+   * supply no variables — an argument bound to a variable this package synthesized (because the
+   * operation declares it non-null and the caller didn't pass one) is ignored, so
+   * `mocks.mockOperation(UserByIdQuery)` still returns a random pooled user.
+   *
+   * Arguments are matched only by exact field name; there is no `authorId` -> `author.id`
+   * traversal. When a root field returns a wrapper type (`{ totalCount, results }`) the entity
+   * list sits below the arguments and cannot be reached — use `mockOperation(doc, (vars) => …)`
+   * with the exported `paginate`/`searchItems` there instead.
+   *
+   * @default false
+   */
+  matchArguments?: boolean | ArgMatchingOptions;
+  /**
    * Add a `__typename` field (set to the type name) to every generated object.
    * Required by the Apollo cache, so it's on by default.
    * @default true
@@ -117,12 +136,15 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    * pools by their return type; nested fields follow the already-wired object references.
    * With a `TypedDocumentNode` the return type is inferred from the document.
    *
-   * Variables don't affect which mocks are chosen; pass them only if your schema requires
-   * them for execution (required variables are otherwise auto-filled with placeholders).
+   * Variables affect which mocks are chosen only when
+   * {@link BuildMocksOptions.matchArguments} is on (globally or via the third argument here);
+   * otherwise pass them only if your schema requires them for execution — required variables
+   * are auto-filled with placeholders when omitted.
    */
   dataForOperation<TData = unknown, TVars = Record<string, unknown>>(
     document: TypedDocumentNode<TData, TVars> | DocumentNode,
     variables?: TVars extends Record<string, unknown> ? Partial<TVars> : Record<string, unknown>,
+    matchArguments?: boolean | ArgMatchingOptions,
   ): TData;
   /**
    * Build an Apollo `MockedProvider` entry for the operation with **no data argument** — the
