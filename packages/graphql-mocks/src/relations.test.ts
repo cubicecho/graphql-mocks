@@ -347,3 +347,80 @@ describe('relationDemand', () => {
     warn.mockRestore();
   });
 });
+
+describe('relations reciprocity', () => {
+  const quiet = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  it('is off by default, leaving wiring one-directional', () => {
+    const mocks = buildMocks(schema, { seed: 1, count: 3, stableIds: true });
+    const users = mocks.User as Record<string, unknown>[];
+    const mirrored = users.every((user) =>
+      (user.todos as Record<string, unknown>[]).every((todo) => todo.user === user),
+    );
+    expect(mirrored).toBe(false);
+  });
+
+  it('points every related object back at its owner when opted in', () => {
+    const warn = quiet();
+    const mocks = buildMocks(schema, {
+      seed: 1,
+      count: 3,
+      relations: { User: { todos: 1 }, _reciprocal: true },
+    });
+    for (const user of mocks.User as Record<string, unknown>[]) {
+      for (const todo of user.todos as Record<string, unknown>[]) {
+        expect(todo.user).toBe(user);
+      }
+    }
+    warn.mockRestore();
+  });
+
+  it('adds the owner to a list-valued inverse without duplicating it', () => {
+    const warn = quiet();
+    const mocks = buildMocks(schema, { seed: 1, count: 3, relations: { _reciprocal: true } });
+    for (const todo of mocks.Todo as Record<string, unknown>[]) {
+      const owner = todo.user as Record<string, unknown>;
+      const todos = owner.todos as Record<string, unknown>[];
+      expect(todos).toContain(todo);
+      expect(new Set(todos).size).toBe(todos.length);
+    }
+    warn.mockRestore();
+  });
+
+  it('warns once for a relationship with no inverse to mirror onto', () => {
+    const warn = quiet();
+    buildMocks(schema, { seed: 1, count: 2, relations: { _reciprocal: true } });
+    const messages = warn.mock.calls.map(([m]) => m as string);
+    expect(messages.filter((m) => m.includes('"Comment.author"'))).toEqual([
+      expect.stringContaining('has no inverse field on "User"'),
+    ]);
+    warn.mockRestore();
+  });
+
+  it('skips an ambiguous inverse rather than guessing', () => {
+    const warn = quiet();
+    const ambiguous = buildSchema(`
+      type Author { id: ID!, books: [Book!]! }
+      type Book { id: ID!, writer: Author!, editor: Author! }
+      type Query { authors: [Author!]! }
+    `);
+    // Pin the wiring so the skip is observable rather than a coin flip: every book is
+    // written by the second author, and the first author holds every book.
+    const mocks = buildMocks(ambiguous, {
+      seed: 1,
+      count: 2,
+      relations: {
+        Author: { books: ({ pool }) => pool },
+        Book: { writer: ({ pool }) => pool[1], editor: ({ pool }) => pool[1] },
+        _reciprocal: true,
+      },
+    });
+    const author = (mocks.Author as Record<string, unknown>[])[0] as Record<string, unknown>;
+    const book = (author.books as Record<string, unknown>[])[0] as Record<string, unknown>;
+    expect(book.writer).not.toBe(author);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('the inverse of "Author.books" is ambiguous'),
+    );
+    warn.mockRestore();
+  });
+});

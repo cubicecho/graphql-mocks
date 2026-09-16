@@ -18,6 +18,7 @@ import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import { qaListLength } from './qa.js';
 import {
+  isReciprocal,
   pickRelated,
   relationBounds,
   relationDemand,
@@ -47,6 +48,8 @@ interface FieldPlan {
   bounds: { min: number; max: number } | null;
   /** The pool to draw from, or undefined when the field can only ever be null. */
   targetPool: Record<string, unknown>[] | undefined;
+  /** Name of the type this field points at, after resolving abstract types. */
+  targetName: string;
   /** Set once a {@link RelationFn} has been warned about, to keep warnings one per site. */
   fnWarned?: boolean;
 }
@@ -86,7 +89,7 @@ function planRelationFields(
 
   /** Finish a plan against the pool it draws from, warning once per site about the result. */
   const commit = (
-    plan: Omit<FieldPlan, 'targetPool'>,
+    plan: Omit<FieldPlan, 'targetPool' | 'targetName'>,
     targetPool: Record<string, unknown>[] | undefined,
     targetName: string,
   ) => {
@@ -123,7 +126,7 @@ function planRelationFields(
       );
     }
 
-    plans.push({ ...plan, bounds, targetPool });
+    plans.push({ ...plan, bounds, targetPool, targetName });
   };
 
   for (const [fieldName, field] of Object.entries(objectType.getFields())) {
@@ -220,6 +223,78 @@ function createMockResult(
   return Object.assign({}, pool, helpers) as MockResult;
 }
 
+/**
+ * The field on `targetType` that points back at `ownerName`, or why there isn't one. The
+ * inverse has to be unique to be unambiguous — two fields of the same type give no way to
+ * know which one owns the relationship.
+ */
+function findInverseField(
+  targetType: GraphQLObjectType,
+  ownerName: string,
+): { fieldName: string; isList: boolean } | 'ambiguous' | undefined {
+  const matches = Object.entries(targetType.getFields())
+    .map(([fieldName, field]) => ({ fieldName, ...unwrapType(field.type) }))
+    .filter(({ namedType }) => namedType.name === ownerName);
+
+  if (matches.length > 1) return 'ambiguous';
+  const [match] = matches;
+  return match && { fieldName: match.fieldName, isList: match.isList };
+}
+
+/**
+ * Mirror every wired relationship back onto its inverse field, so `user.todos[i].user` is
+ * that same user. Opt-in via `relations: { _reciprocal: true }`, and inherently lossy in one
+ * direction: a Todo in two users' lists can only point at one owner, so the last write wins.
+ */
+function wireReciprocal(
+  schema: GraphQLSchema,
+  objectTypes: GraphQLObjectType[],
+  pool: Record<string, Record<string, unknown>[]>,
+  plansByType: Map<string, FieldPlan[]>,
+): void {
+  for (const objectType of objectTypes) {
+    for (const plan of plansByType.get(objectType.name) ?? []) {
+      const targetType = schema.getType(plan.targetName);
+      if (!isObjectType(targetType)) continue;
+
+      const site = `${objectType.name}.${plan.fieldName}`;
+      const inverse = findInverseField(targetType, objectType.name);
+      if (inverse === undefined) {
+        console.warn(
+          `[graphql-mocks] relations: "${site}" has no inverse field on "${plan.targetName}" — nothing to mirror it onto`,
+        );
+        continue;
+      }
+      if (inverse === 'ambiguous') {
+        console.warn(
+          `[graphql-mocks] relations: "${plan.targetName}" has more than one field of type "${objectType.name}", so the inverse of "${site}" is ambiguous — skipped`,
+        );
+        continue;
+      }
+
+      for (const instance of pool[objectType.name] ?? []) {
+        const value = instance[plan.fieldName];
+        const related = (Array.isArray(value) ? value : [value]).filter(
+          (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
+        );
+
+        for (const target of related) {
+          if (!inverse.isList) {
+            target[inverse.fieldName] = instance;
+            continue;
+          }
+          const existing = target[inverse.fieldName];
+          if (!Array.isArray(existing)) {
+            target[inverse.fieldName] = [instance];
+          } else if (!existing.includes(instance)) {
+            existing.push(instance);
+          }
+        }
+      }
+    }
+  }
+}
+
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = resolveOptions(options);
   validateRelations(schema, resolved.relations);
@@ -257,10 +332,12 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   }
 
   // Phase 2: wire relationship fields from the pool
+  const plansByType = new Map<string, FieldPlan[]>();
   for (const objectType of objectTypes) {
     const instances = pool[objectType.name] ?? [];
     if (instances.length === 0) continue;
     const plans = planRelationFields(objectType, pool, resolved);
+    plansByType.set(objectType.name, plans);
 
     for (const [index, instance] of instances.entries()) {
       for (const plan of plans) {
@@ -304,6 +381,11 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
         instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }
+  }
+
+  // Phase 3: mirror relationships onto their inverse fields, when asked to.
+  if (isReciprocal(resolved.relations)) {
+    wireReciprocal(schema, objectTypes, pool, plansByType);
   }
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);

@@ -64,6 +64,11 @@ export function relationBounds(
   return spec;
 }
 
+/** Whether the config opts into mirroring each relationship onto its inverse field. */
+export function isReciprocal(relations: RelationsConfig | undefined): boolean {
+  return relations !== undefined && isMap(relations) && relations._reciprocal === true;
+}
+
 /**
  * Draw a field's related objects from the target pool, without replacement — the same object
  * twice in one list would collapse to a single entry under Apollo cache normalization.
