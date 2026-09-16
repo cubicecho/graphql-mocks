@@ -9,6 +9,7 @@ import type {
   MockedResponse,
 } from './apolloMocks.js';
 import type { ArgMatchingOptions } from './argMatching.js';
+import type { MockHandlerOptions, MockRequestHandler } from './requestHandler.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
 
@@ -187,6 +188,22 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
     operation: TypedDocumentNode<TData, TVars>,
     options?: MockOperationOptions<TVars, TData>,
   ): MockOperationVariants<TData, TVars>;
+  /**
+   * Build a handler that answers **any** operation from this graph — no per-operation
+   * registration, so one handler covers a whole screen's queries and mutations:
+   *
+   * ```ts
+   * const handler = mocks.toRequestHandler();
+   * const { data } = await handler({ query: SomeQuery, variables: { id } });
+   * ```
+   *
+   * Results are memoized per document + variables by default, so a refetch or a second
+   * identical query returns the same rows. `overrides` force a specific operation into an
+   * error, loading or fixed-data state, and `calls` records what was asked for.
+   *
+   * Pair it with the `@vantreeseba/graphql-mocks/apollo` export to get an `ApolloLink`.
+   */
+  toRequestHandler(options?: MockHandlerOptions): MockRequestHandler;
   /**
    * Build a resolver map keyed by type name, each returning a random pooled instance.
    * Type names declared in `TTypes` come back typed (`resolvers.User()` is `TTypes['User']`)

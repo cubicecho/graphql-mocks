@@ -24,3 +24,14 @@ export type {
   ScalarMocker,
 } from './types.js';
 export { defaultScalarMockers, resolveScalarMocker } from './scalarMockers.js';
+export { createRequestHandler } from './requestHandler.js';
+export type {
+  MockErrorInput,
+  MockExecutionResult,
+  MockHandlerOptions,
+  MockOperationInfo,
+  MockOverride,
+  MockOverrideMatcher,
+  MockRequest,
+  MockRequestHandler,
+} from './requestHandler.js';

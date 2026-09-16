@@ -2,6 +2,7 @@ import type { Faker } from '@faker-js/faker';
 import {
   type DocumentNode,
   type GraphQLField,
+  type GraphQLFormattedError,
   type GraphQLInputType,
   type GraphQLNamedType,
   type GraphQLOutputType,
@@ -279,7 +280,18 @@ function synthesizeVariables(
  * fields are resolved from the pool by their return type; everything below uses the
  * already-wired object references, so the output matches the query's selection set.
  */
-export function resolveOperationData(
+/** The raw execution outcome: data plus any GraphQL errors, both left for the caller to handle. */
+export interface OperationResult {
+  data: unknown;
+  errors?: readonly GraphQLFormattedError[];
+}
+
+/**
+ * Execute `document` against the mock graph and return both data and errors. Callers that only
+ * want data use {@link resolveOperationData}; a transport needs the errors to build a GraphQL
+ * error response instead of silently dropping them.
+ */
+export function resolveOperationResult(
   schema: GraphQLSchema,
   pool: Pool,
   faker: Faker,
@@ -287,7 +299,7 @@ export function resolveOperationData(
   document: DocumentNode,
   variables?: Record<string, unknown>,
   argOverrides?: boolean | ArgMatchingOptions,
-): unknown {
+): OperationResult {
   const { values, synthesized } = synthesizeVariables(
     schema,
     document,
@@ -328,10 +340,34 @@ export function resolveOperationData(
         : undefined,
   });
 
-  if (result.errors?.length) {
-    console.warn(
-      `[graphql-mocks] dataForOperation: ${result.errors.map((e) => e.message).join('; ')}`,
-    );
+  return result.errors?.length
+    ? { data: result.data ?? null, errors: result.errors.map((e) => e.toJSON()) }
+    : { data: result.data ?? null };
+}
+
+/**
+ * Execute `document` against the mock graph and return its data, warning on any GraphQL errors.
+ */
+export function resolveOperationData(
+  schema: GraphQLSchema,
+  pool: Pool,
+  faker: Faker,
+  options: BuildMocksOptions,
+  document: DocumentNode,
+  variables?: Record<string, unknown>,
+  argOverrides?: boolean | ArgMatchingOptions,
+): unknown {
+  const { data, errors } = resolveOperationResult(
+    schema,
+    pool,
+    faker,
+    options,
+    document,
+    variables,
+    argOverrides,
+  );
+  if (errors?.length) {
+    console.warn(`[graphql-mocks] dataForOperation: ${errors.map((e) => e.message).join('; ')}`);
   }
-  return result.data ?? null;
+  return data;
 }

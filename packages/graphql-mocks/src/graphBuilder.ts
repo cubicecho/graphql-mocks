@@ -22,6 +22,11 @@ import {
   resolveFaker,
   resolveListSize,
 } from './helpers.js';
+import {
+  type MockHandlerOptions,
+  type MockRequestHandler,
+  createRequestHandler,
+} from './requestHandler.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult } from './types.js';
 
@@ -115,6 +120,12 @@ function createMockResult(
       opOptions: MockOperationOptions = {},
     ) {
       return looseMockOperationVariants(document, operationData(document, opOptions), opOptions);
+    },
+    toRequestHandler(handlerOptions: MockHandlerOptions = {}): MockRequestHandler {
+      return createRequestHandler(
+        { schema, pool: pool as Record<string, Record<string, unknown>[]>, faker, options },
+        handlerOptions,
+      );
     },
     toResolvers(): Record<string, () => unknown> {
       const resolvers: Record<string, () => unknown> = {};
