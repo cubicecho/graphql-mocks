@@ -14,6 +14,10 @@ export { paginate, searchItems } from './collection.js';
 export type { PageArgs } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
+  ArgOverride,
+  ArgOverrideContext,
+  ArgOverrideData,
+  ArgOverrideMatch,
   BuildMocksOptions,
   CountConfig,
   FieldOverrideFn,
@@ -61,3 +65,7 @@ export { buildMatrix } from './matrix.js';
 export type { BuildMatrixOptions, MatrixCell, MatrixCellInfo } from './matrix.js';
 export { composeScenarios, defineScenarios } from './scenarios.js';
 export { resolveRelation } from './relations.js';
+export { select, toPlain } from './plain.js';
+export type { CycleStrategy, SelectOptions, ToPlainOptions } from './plain.js';
+export { assertValidMocks, validateMocks } from './validateMocks.js';
+export type { MockIssue, ValidateMocksOptions } from './validateMocks.js';

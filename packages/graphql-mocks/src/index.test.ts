@@ -8,6 +8,7 @@ const EXPORTS = [
   'DEFAULT_HUGE_LIST_SIZE',
   'QA_PROFILES',
   'QA_PROFILE_NAMES',
+  'assertValidMocks',
   'buildMatrix',
   'buildMocks',
   'buildQaSets',
@@ -23,6 +24,9 @@ const EXPORTS = [
   'resolveRelation',
   'resolveScalarMocker',
   'searchItems',
+  'select',
+  'toPlain',
+  'validateMocks',
 ];
 
 describe('index', () => {

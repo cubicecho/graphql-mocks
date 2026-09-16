@@ -4,8 +4,10 @@ import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js'
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
+  ArgOverride,
   BuildMocksOptions,
   CountConfig,
+  DeriveConfig,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
@@ -44,10 +46,14 @@ export interface ResolvedOptions {
    * `resolveArgMatching` is what folds the two together at the point of use.
    */
   matchArguments: boolean | ArgMatchingOptions | undefined;
+  /** Argument-matched field answers, in declaration order — first match wins. */
+  argOverrides: readonly ArgOverride[];
   /** Prepended to every stable id. Empty unless the caller (or `buildMatrix`) sets it. */
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
+  /** Field functions run after the graph is complete, so they see the finished object. */
+  derive: DeriveConfig | undefined;
   relations: RelationsConfig | undefined;
   resolveType: ((abstractTypeName: string) => string) | undefined;
   qa: ResolvedQa | undefined;
@@ -71,9 +77,11 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     stableIds: options.stableIds ?? false,
     listSize: resolveListSize(options.listSize),
     matchArguments: options.matchArguments,
+    argOverrides: options.argOverrides ?? [],
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    derive: options.derive,
     relations: options.relations,
     resolveType: options.resolveType,
     qa,

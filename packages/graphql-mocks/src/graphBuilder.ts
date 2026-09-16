@@ -14,6 +14,7 @@ import {
   mockOperationVariants as buildMockOperationVariants,
   variablesForData,
 } from './apolloMocks.js';
+import { syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
@@ -25,6 +26,7 @@ import { qaListLength } from './qa.js';
 import {
   isReciprocal,
   pickRelated,
+  reciprocalEnumerable,
   relationBounds,
   relationDemand,
   resolveRelation,
@@ -37,7 +39,7 @@ import {
 } from './requestHandler.js';
 import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
-import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
+import type { BuildMocksOptions, FieldDeriveFn, MockResult, RelationSpec } from './types.js';
 
 /** A singular field draws exactly one object; the QA list profile does not apply to it. */
 const SINGULAR_BOUNDS = { min: 1, max: 1 };
@@ -321,13 +323,33 @@ function findInverseField(
  * Mirror every wired relationship back onto its inverse field, so `user.todos[i].user` is
  * that same user. Opt-in via `relations: { _reciprocal: true }`, and inherently lossy in one
  * direction: a Todo in two users' lists can only point at one owner, so the last write wins.
+ *
+ * `enumerable` is false under `_reciprocal: 'hidden'`: the back-reference still reads normally,
+ * but a generic walk never enumerates it, so the cycle it creates stays out of the way of
+ * `JSON.stringify` and friends.
  */
 function wireReciprocal(
   schema: GraphQLSchema,
   objectTypes: GraphQLObjectType[],
   pool: Record<string, Record<string, unknown>[]>,
   plansByType: Map<string, FieldPlan[]>,
+  enumerable: boolean,
 ): void {
+  /** Assign the inverse field, hiding it from enumeration when that's what was asked for. */
+  const write = (target: Record<string, unknown>, fieldName: string, value: unknown) => {
+    if (enumerable) {
+      target[fieldName] = value;
+      return;
+    }
+    // Phase 2 already wrote the field as an ordinary property, so redefine rather than assign.
+    Object.defineProperty(target, fieldName, {
+      value,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  };
+
   for (const objectType of objectTypes) {
     for (const plan of plansByType.get(objectType.name) ?? []) {
       const targetType = schema.getType(plan.targetName);
@@ -356,16 +378,68 @@ function wireReciprocal(
 
         for (const target of related) {
           if (!inverse.isList) {
-            target[inverse.fieldName] = instance;
+            write(target, inverse.fieldName, instance);
             continue;
           }
           const existing = target[inverse.fieldName];
           if (!Array.isArray(existing)) {
-            target[inverse.fieldName] = [instance];
+            write(target, inverse.fieldName, [instance]);
           } else if (!existing.includes(instance)) {
             existing.push(instance);
           }
         }
+      }
+    }
+  }
+}
+
+/**
+ * Run `derive` over every pooled instance. Last phase by design: an instance is only complete
+ * once relationships are wired, and a derived field is exactly the one that needs to read them.
+ * A typo'd type or field name is worth saying out loud — a derive that never fires looks the
+ * same as one whose value was overwritten.
+ */
+function applyDerive(
+  objectTypes: GraphQLObjectType[],
+  pool: Record<string, Record<string, unknown>[]>,
+  resolved: ResolvedOptions,
+): void {
+  const { derive, faker } = resolved;
+  if (!derive) return;
+
+  const known = new Set(objectTypes.map((objectType) => objectType.name));
+  for (const typeName of Object.keys(derive)) {
+    if (!known.has(typeName)) {
+      console.warn(`[graphql-mocks] derive: unknown type "${typeName}" — no pool to derive onto`);
+    }
+  }
+
+  for (const objectType of objectTypes) {
+    const fields = derive[objectType.name];
+    if (!fields) continue;
+
+    const schemaFields = objectType.getFields();
+    // Object.entries order is the order the config was written, so one derive can read
+    // another's result; hold the pairs once rather than re-walking per instance.
+    const entries: [string, FieldDeriveFn][] = [];
+    for (const [fieldName, fn] of Object.entries(fields)) {
+      if (typeof fn !== 'function') continue;
+      if (!(fieldName in schemaFields)) {
+        console.warn(
+          `[graphql-mocks] derive: "${objectType.name}.${fieldName}" is not a field on that type — the value will be in the pool but no query can select it`,
+        );
+      }
+      entries.push([fieldName, fn as FieldDeriveFn]);
+    }
+
+    for (const [index, instance] of (pool[objectType.name] ?? []).entries()) {
+      for (const [fieldName, fn] of entries) {
+        instance[fieldName] = fn(instance, {
+          index,
+          typeName: objectType.name,
+          fieldName,
+          faker,
+        });
       }
     }
   }
@@ -461,8 +535,21 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
 
   // Phase 3: mirror relationships onto their inverse fields, when asked to.
   if (isReciprocal(resolved.relations)) {
-    wireReciprocal(schema, objectTypes, pool, plansByType);
+    wireReciprocal(
+      schema,
+      objectTypes,
+      pool,
+      plansByType,
+      reciprocalEnumerable(resolved.relations),
+    );
   }
+
+  // Phase 4: a QA list profile resized the lists; bring their count scalars back in step.
+  syncCountFields(objectTypes, pool, resolved);
+
+  // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
+  // names a count field wins over phase 4's inference — it was written, the other was guessed.
+  applyDerive(objectTypes, pool, resolved);
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }

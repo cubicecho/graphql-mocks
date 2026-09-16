@@ -66,7 +66,21 @@ export function relationBounds(
 
 /** Whether the config opts into mirroring each relationship onto its inverse field. */
 export function isReciprocal(relations: RelationsConfig | undefined): boolean {
-  return relations !== undefined && isMap(relations) && relations._reciprocal === true;
+  const mode = reciprocalMode(relations);
+  return mode === true || mode === 'hidden';
+}
+
+/**
+ * Whether mirrored back-references are ordinary enumerable properties. `'hidden'` makes them
+ * non-enumerable, so a generic walk of a pooled object never reaches the cycle they create.
+ */
+export function reciprocalEnumerable(relations: RelationsConfig | undefined): boolean {
+  return reciprocalMode(relations) !== 'hidden';
+}
+
+function reciprocalMode(relations: RelationsConfig | undefined): boolean | 'hidden' | undefined {
+  if (relations === undefined || !isMap(relations)) return undefined;
+  return relations._reciprocal as boolean | 'hidden' | undefined;
 }
 
 /**
