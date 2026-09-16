@@ -375,3 +375,79 @@ describe('mocks.mockOperation dynamic form', () => {
     expect(variants.withError.error?.message).toContain('UserById');
   });
 });
+
+describe('nested input arguments', () => {
+  const matched = buildMocks(schema, {
+    seed: 5,
+    count: 8,
+    stableIds: true,
+    matchArguments: true,
+  });
+
+  it('matches a flattened input field against the pool', () => {
+    // `Todo-3` is a real pooled id, reached through `input`, not as a top-level argument.
+    const doc = parse('mutation { createTodo(input: { title: "x", userId: "User-1" }) { id } }');
+    const data = matched.dataForOperation(doc) as { createTodo: { id: string } };
+    expect(data.createTodo.id).toBeDefined();
+  });
+
+  it('echoes an input field the pool could not match', () => {
+    const doc = parse(`
+      mutation {
+        createTodo(input: { title: "Ship the release", priority: HIGH }) {
+          id title priority completed
+        }
+      }
+    `);
+    const data = matched.dataForOperation(doc) as {
+      createTodo: { id: string; title: string; priority: string; completed: boolean };
+    };
+    expect(data.createTodo.title).toBe('Ship the release');
+    expect(data.createTodo.priority).toBe('HIGH');
+    // Everything the caller didn't state is still generated.
+    expect(typeof data.createTodo.completed).toBe('boolean');
+    expect(data.createTodo.id).toBeDefined();
+  });
+
+  it('leaves the pooled instance itself untouched when it echoes', () => {
+    const doc = parse('mutation { createTodo(input: { title: "Echoed" }) { id title } }');
+    matched.dataForOperation(doc);
+    expect(matched.Todo?.some((t) => (t as { title: string }).title === 'Echoed')).toBe(false);
+  });
+
+  it('echoes over a top-level argument miss too', () => {
+    const doc = parse('mutation { updateUser(id: "nope", name: "Renamed") { id name email } }');
+    const data = matched.dataForOperation(doc) as {
+      updateUser: { id: string; name: string; email: string };
+    };
+    expect(data.updateUser).toMatchObject({ id: 'nope', name: 'Renamed' });
+    expect(data.updateUser.email).toContain('@');
+  });
+
+  it('keeps the plain random fallback with echoOnMiss off', () => {
+    const doc = parse('mutation { updateUser(id: "nope", name: "Renamed") { id name } }');
+    const data = matched.dataForOperation(doc, undefined, { echoOnMiss: false }) as {
+      updateUser: { id: string; name: string };
+    };
+    expect(data.updateUser.id).not.toBe('nope');
+    expect(data.updateUser.name).not.toBe('Renamed');
+  });
+
+  it('leaves a synthesized variable inside an input object alone', () => {
+    // `$input` is required and unsupplied, so every value under it is invented — filtering on
+    // them would null a mutation that used to return a plausible todo.
+    const doc = parse(`
+      mutation Create($input: CreateTodoInput!) { createTodo(input: $input) { id title } }
+    `);
+    const data = matched.dataForOperation(doc) as { createTodo: { id: string; title: string } };
+    expect(matched.Todo?.some((t) => (t as { id: string }).id === data.createTodo.id)).toBe(true);
+  });
+
+  it('does not flatten with flattenInputs false', () => {
+    const doc = parse('mutation { createTodo(input: { title: "Ship it" }) { id title } }');
+    const data = matched.dataForOperation(doc, undefined, { flattenInputs: false }) as {
+      createTodo: { title: string };
+    };
+    expect(data.createTodo.title).not.toBe('Ship it');
+  });
+});

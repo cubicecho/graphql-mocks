@@ -11,10 +11,10 @@ Key facts:
 
 ## Documentation
 
-- [Monorepo overview](https://github.com/vantreeseba/graphql-mocks/blob/main/README.md): Packages table and development workflow.
-- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, relations, scenario, resolveType, addTypename, stableIds, idPrefix, listSize, qa, matchArguments), QA mode, scenarios, argument matching, the request handler and Apollo link, typed pools, and helpers.
-- [Codegen plugin: @vantreeseba/graphql-mocks-codegen](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks-codegen/README.md): generating a `SchemaTypeMap`, plugin configuration (`typeMapName`, `typesImportPath`, `typesNamespace`), and generated output.
-- [AGENTS.md](https://github.com/vantreeseba/graphql-mocks/blob/main/AGENTS.md): Project structure, stack, conventions, and contributor guidance.
+- [Monorepo overview](https://github.com/cubicecho/graphql-mocks/blob/main/README.md): Packages table and development workflow.
+- [Runtime: @vantreeseba/graphql-mocks](https://github.com/cubicecho/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, relations, scenario, resolveType, addTypename, stableIds, idPrefix, listSize, qa, matchArguments), QA mode, scenarios, argument matching, the request handler and Apollo link, typed pools, and helpers.
+- [Codegen plugin: @vantreeseba/graphql-mocks-codegen](https://github.com/cubicecho/graphql-mocks/blob/main/packages/graphql-mocks-codegen/README.md): generating a `SchemaTypeMap`, plugin configuration (`typeMapName`, `typesImportPath`, `typesNamespace`), and generated output.
+- [AGENTS.md](https://github.com/cubicecho/graphql-mocks/blob/main/AGENTS.md): Project structure, stack, conventions, and contributor guidance.
 
 ## API
 
@@ -60,6 +60,6 @@ Key facts:
 
 ## Optional
 
-- [CHANGELOG.md](https://github.com/vantreeseba/graphql-mocks/blob/main/CHANGELOG.md): Release history.
-- [LICENSE](https://github.com/vantreeseba/graphql-mocks/blob/main/LICENSE): MIT.
-- [Issues](https://github.com/vantreeseba/graphql-mocks/issues): Bug reports and feature requests.
+- [CHANGELOG.md](https://github.com/cubicecho/graphql-mocks/blob/main/CHANGELOG.md): Release history.
+- [LICENSE](https://github.com/cubicecho/graphql-mocks/blob/main/LICENSE): MIT.
+- [Issues](https://github.com/cubicecho/graphql-mocks/issues): Bug reports and feature requests.

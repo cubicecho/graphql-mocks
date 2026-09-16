@@ -87,6 +87,27 @@ const mocks = buildMocks(schema, {
 });
 ```
 
+### Derived fields
+
+An override fires while the instance is half-built, so it cannot see its siblings. Any field whose value is a function of the rest of the object — a total over a list, a name assembled from its parts, a balance that is a difference of two others — belongs in `derive` instead:
+
+```ts
+const mocks = buildMocks(schema, {
+  relations: { ProductSearchResult: { results: 3 } },
+  derive: {
+    ProductSearchResult: { totalCount: (self) => self.results.length },
+    User: { fullName: (self) => `${self.firstName} ${self.lastName}` },
+    StockLevel: { available: (self) => self.onHand - self.reserved },
+  },
+});
+```
+
+`derive` runs last — after scalars, after `overrides`, after relationships are wired and mirrored — so `self` is the finished object: every scalar, every relationship field, and every reciprocal back-reference is already there to read. Because it runs last it also **wins** over an `overrides` entry for the same field.
+
+The second argument is `{ index, typeName, fieldName, faker }`, with the same seeded faker the generator drew with. Within one type, derives run in the order they are written, so one may read another's result. Derives apply to pooled instances, which is what every operation resolves from — so `dataForOperation` and every Apollo mock see the derived values too.
+
+Merging follows the same two-level rule as `overrides`: a scenario layer and the build options combine per type and per field.
+
 ### `__typename` and stable ids
 
 Every object gets a `__typename` by default (the Apollo cache needs it). Turn it off with `addTypename: false`. Enable `stableIds` to give each object with an `id` field a readable, collision-free `TypeName-<index>` id instead of a random scalar:
@@ -217,9 +238,43 @@ buildMocks(schema, {
     limitArgs: ['limit', 'pageSize'],
     ignoreArgs: ['locale'],
     onMiss: { singular: 'fallback', list: 'empty' },
+    flattenInputs: true,        // look inside input objects — on by default
+    flattenDepth: 1,
+    echoOnMiss: true,
+    partition: true,            // uninterpretable arguments still separate results
   },
 });
 ```
+
+### Nested input objects
+
+Generated schemas rarely put the interesting argument at the top level. `where: { id: $id }` and `data: { title: $title }` are the normal shapes, and matching against the wrapper name alone would find nothing — `user(id: $id)` would resolve correctly while `account(where: { id: $id })` returned a random account.
+
+So input objects are flattened one level before matching, and their fields are matched under their own names:
+
+```ts
+// where: { id: "Account-2" }        → equality on Account.id
+// where: { id: { equals: "…" } }    → the ORM operator form, unwrapped
+// where: { id: { in: ["a", "b"] } } → an `in` match
+// data:  { name: "Acme", tier: 2 }  → equality on both fields
+```
+
+`equals` / `eq` / `is` / `_eq` and `in` / `_in` are recognized as operator objects and stand in for their inner value; a comparison that isn't one of those (`gte`, `contains`, `not`) is left alone rather than guessed at. Depth stops at 1 by default, so `where: { owner: { id } }` does **not** reach through — that `id` names the *owner*, not the returned type. Raise `flattenDepth`, or turn the whole thing off with `flattenInputs: false`. `ignoreArgs` applies to nested names too, so `ignoreArgs: ['tier']` skips `data.tier` and `ignoreArgs: ['where']` skips the wrapper whole.
+
+Authorship still travels with the values: a `where: { id: $id }` whose `$id` was invented to satisfy execution counts as *not* stated, the same as a top-level `id: $id`, and the field falls back to its random pick.
+
+### Mutations echo what they were handed
+
+A mutation has no pooled instance carrying the values it was just given, so `createTodo(input: { title: "Ship the release" })` always misses — and a random todo with somebody else's title is the one thing a test just asserted on. On a **singular** miss the stated values are stamped back over a copy of the fallback instance:
+
+```ts
+mocks.dataForOperation(
+  parse('mutation { createTodo(input: { title: "Ship the release", priority: HIGH }) { … } }'),
+);
+// { createTodo: { title: 'Ship the release', priority: 'HIGH', id: 'Todo-3', completed: false, … } }
+```
+
+Only fields the caller actually named are replaced; everything else stays generated, and the pooled instance itself is never mutated. `echoOnMiss: false` restores the plain random fallback.
 
 **Variables you didn't supply are ignored.** Required variables are auto-filled so execution can run, and any argument bound to one of those invented values is dropped — so `mocks.mockOperation(UserByIdQuery)` with no variables still returns a random pooled user, exactly as with matching off. A variable you pass, a literal, or a schema/document default counts as intent and is applied.
 
@@ -236,21 +291,78 @@ Paging switches the source from a random subset to the whole pool in stable orde
 buildMocks(schema, { count: 50, listSize: { min: 10, max: 20 }, matchArguments: true });
 ```
 
-**Known limitation.** When a root field returns a wrapper type (`{ totalCount, results }`), the entity list sits one level below the arguments and the engine cannot connect them. Use a resolver function plus the exported `paginate` / `searchItems` there:
+### Wrapper and connection types
+
+Most paginated APIs don't return the list directly — they wrap it:
+
+```graphql
+type Query { products(take: Int, skip: Int, search: String): ProductSearchResult! }
+type ProductSearchResult { results: [Product!]!, totalCount: Int! }
+```
+
+The arguments are on the root field, but the rows to page are under `results`. So when a field returns an object that holds a list, matching is applied to the **list's** type and a copy of the wrapper comes back with that list replaced:
 
 ```ts
-import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
+mocks.dataForOperation(parse('{ products(skip: 10, take: 5) { results { id } } }'));
+// { products: { results: [ …the 11th–15th pooled products… ], totalCount: … } }
+```
 
-mocks.mockOperation(SearchUsersQuery, {
-  dynamic: true,
-  transform: (data, vars) => ({
-    searchUsers: {
-      ...data.searchUsers,
-      results: paginate(searchItems(mocks.User, vars.term), vars),
-    },
-  }),
+The list is drawn from the entity's own pool, in stable order — the same switch a direct list field makes when it is paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper itself is never mutated.
+
+Relay connections are recognized too: `edges` are filtered and paged by their `node`, rebuilt as edges (cursors and all), and `pageInfo` is brought in line with the page — `hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, but only the keys the schema actually declares.
+
+The list is found by explicit config first, then the Relay shape, then **exactly one** object-typed list field. "Exactly one" is the safeguard: with two lists there is no way to tell which one `take` refers to, so nothing is guessed and the wrapper comes back as before. Scalar lists (`tags: [String!]`) are fields of the wrapper, not its rows, and don't count.
+
+```ts
+buildMocks(schema, {
+  matchArguments: {
+    unwrap: true,                              // on by default
+    listPath: { ShelfResult: 'clearance' },    // or a bare 'results' for every wrapper
+  },
 });
 ```
+
+A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page.
+
+### Selections that differ only by an argument
+
+A dashboard selects one schema field several times, aliased, with a different argument value each time:
+
+```graphql
+query Dashboard {
+  warehouse(id: $id) {
+    inStock: items(where: IN_STOCK) { ...Row }
+    lowStock: items(where: LOW_STOCK) { ...Row }
+    overStock: items(where: OVER_STOCK) { ...Row }
+  }
+}
+```
+
+One field, three selections, told apart only by an enum nothing can interpret. Without help all three panels render byte-identical rows, which reads as a bug.
+
+**Partitioning** is the cheap default. Any active argument that no bucket could interpret becomes a partition key, and each distinct value deterministically draws a *different* window of the pool — same list lengths, different rows, stable across re-renders:
+
+```ts
+buildMocks(schema, { matchArguments: true });
+// the three panels now show three different sets of items
+```
+
+It does not make the rows *mean* `LOW_STOCK` — nothing here could know what that implies. It makes the gap visible instead of silent. Turn it off with `matchArguments: { partition: false }`.
+
+**`argOverrides`** is the part that actually answers the question, because only you know what the argument means:
+
+```ts
+buildMocks(schema, {
+  argOverrides: [
+    { match: { field: 'items', args: { where: 'LOW_STOCK' } }, data: lowStockRows },
+    { match: { type: 'Query', field: 'items' }, data: ({ pool }) => pool.slice(0, 2) },
+  ],
+});
+```
+
+First match wins. `match.field` is the **schema** field name, never the alias; `match.type` narrows to one parent type; `match.args` compares by value (an input object matches structurally), and `match.predicate` replaces it for anything more involved. `data` is a value, or a function handed `{ typeName, fieldName, args, pool, isList, faker }`.
+
+Every *other* field of the operation still resolves from the graph — which is what an operation-level override on a handler cannot do, and why this exists next to it. `argOverrides` are instructions rather than inferences, so they apply whether or not `matchArguments` is on.
 
 ## Resolver-function mocks
 
@@ -358,6 +470,32 @@ const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(han
 // …assert on handler.calls
 ```
 
+#### `createMockClient`
+
+The three lines above are the same three lines in every story file and every test helper, so
+there's a factory for them:
+
+```tsx
+import { createMockClient } from '@vantreeseba/graphql-mocks/apollo';
+
+const client = createMockClient(mocks, { delay: 300, matchArguments: true });
+```
+
+It takes everything `mockLink` takes, plus `cache`, `link`, `defaultOptions` and `clientOptions`
+for the client itself. Two defaults are worth knowing about, both overridable:
+
+- **A fresh `InMemoryCache` per call.** Story isolation shouldn't be something you have to know
+  to ask for.
+- **`fetchPolicy: 'no-cache'` and `errorPolicy: 'all'`** for `query` and `watchQuery`. The point
+  of a mock client is to see what the mocks return, and an error state is a state to render, not
+  a rejected promise nobody catches. `defaultOptions` merges over these per operation kind and
+  then per key, so `{ query: { fetchPolicy: 'cache-first' } }` keeps the rest.
+
+Pass a *factory* — `(options) => buildMocks(schema, { ...defaults, ...options })` — instead of a
+built graph when something downstream needs to rebuild the graph with different options. Graphs
+built that way are memoized per config, so re-renders reuse them rather than reshuffling every
+pool.
+
 ## Story states
 
 `mockScenarios` builds the three states a component is usually exercised in, from one base config:
@@ -377,49 +515,68 @@ mockScenarios({}, ['UserById', TodosQuery]); // several
 mockScenarios({}, (op) => op.operationType === 'mutation');
 ```
 
-There's no Storybook dependency and no CSF types here — the parameter key and the spread into a story belong to your Storybook addon, which churns across majors. A decorator is a few lines:
+### The Storybook decorator
+
+`withGraphqlMocks` is that trio wired to a story parameter. It stays React-free — the renderer
+churns across Storybook majors, so `wrap` is yours — but the parameter parsing, the scenarios and
+the client memo are not yours to write:
 
 ```tsx
 // .storybook/preview.tsx
-import { ApolloClient, ApolloProvider, InMemoryCache } from '@apollo/client';
+import { ApolloProvider } from '@apollo/client';
 import { buildMocks } from '@vantreeseba/graphql-mocks';
-import { mockLink } from '@vantreeseba/graphql-mocks/apollo';
+import { withGraphqlMocks } from '@vantreeseba/graphql-mocks/apollo';
 import { schema } from './schema';
 
 export const decorators = [
-  (Story, context) => {
-    const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
-    const client = new ApolloClient({
-      cache: new InMemoryCache(),
-      link: mockLink(mocks, context.parameters.graphqlMocks ?? {}),
-    });
-    return (
-      <ApolloProvider client={client}>
-        <Story />
-      </ApolloProvider>
-    );
-  },
+  withGraphqlMocks(
+    (options) => buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true, ...options }),
+    {
+      wrap: (client, Story) => (
+        <ApolloProvider client={client}>
+          <Story />
+        </ApolloProvider>
+      ),
+    },
+  ),
 ];
 ```
 
 ```tsx
 // SomeScreen.stories.tsx
-const states = mockScenarios({}, 'UserById');
-
-export const Default = { parameters: { graphqlMocks: states.default } };
-export const Loading = { parameters: { graphqlMocks: states.loading } };
-export const Errored = { parameters: { graphqlMocks: states.errored } };
+export const Default = {};                                              // no parameter needed
+export const Loading = { parameters: { graphqlMocks: 'loading' } };
+export const Errored = { parameters: { graphqlMocks: 'errored' } };
+export const OnePanelFailing = {
+  parameters: { graphqlMocks: { state: 'errored', target: 'UserById' } },
+};
+export const Empty = { parameters: { graphqlMocks: { build: { count: 0 } } } };
+export const LongText = { parameters: { graphqlMocks: { qa: 'longText' } } };
+export const Slow = { parameters: { graphqlMocks: { delay: 2000 } } };
+export const Unmocked = { parameters: { graphqlMocks: false } };
 ```
+
+The parameter is `true | 'loading' | 'errored' | { state, target, build, qa, ...handler options }`,
+or `false` to opt one story out. Options passed to `withGraphqlMocks` itself are the base every
+story is layered over — plain options key by key, `overrides` concatenated with the story's first.
+
+`build` and `qa` need the factory form of the source (as above); with an already-built graph
+there's nothing to rebuild and they warn. Clients are memoized per resolved parameter, so a
+control knob re-rendering a story reuses its client instead of remounting into a fresh cache.
+
+`resolveMockClient(source, parameter, base)` is the same resolution without the decorator, for
+a renderer `wrap` doesn't fit.
 
 The same shape works in component tests:
 
 ```tsx
-import { type MockHandlerOptions, buildMocks } from '@vantreeseba/graphql-mocks';
+import { buildMocks } from '@vantreeseba/graphql-mocks';
+import { type MockHandlerOptions, createMockClient } from '@vantreeseba/graphql-mocks/apollo';
 
 function renderWithMocks(ui: React.ReactElement, options: MockHandlerOptions = {}) {
   const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
   const handler = mocks.toRequestHandler(options);
-  const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(handler) });
+  const client = createMockClient(handler);
   return { mocks, handler, ...render(<ApolloProvider client={client}>{ui}</ApolloProvider>) };
 }
 ```
@@ -529,9 +686,36 @@ export const QaVariants = sets.map((set) => ({
 }));
 ```
 
+For a single story, the [decorator](#the-storybook-decorator) takes a profile directly —
+`parameters: { graphqlMocks: { qa: 'emptyText' } }` — and builds that graph once.
+
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
 just that preset gives you the same data back.
+
+### Count fields stay in step with their lists
+
+A list profile resizes list fields; on the wrapper shape most paginated APIs use, that would leave the total behind:
+
+```jsonc
+{ "results": [], "totalCount": 315 }   // an empty state with a footer reading "315 of 315"
+```
+
+So with a `lists` profile active, companion count scalars are rewritten to the length of the list they count. A count is paired by name:
+
+- a name that points at a list wins — `postCount`, `numberOfPosts`, `totalPosts` all pair with `posts` (singular and plural match)
+- a name that points nowhere in particular — `total`, `count`, `totalCount`, `itemCount`, `resultCount`, `numberOfItems` — pairs with the type's list field when it has exactly one, and warns when it has more than one rather than guessing
+- a name that points at a list the type doesn't have is left alone, so `numberOfEmployees` never becomes the length of `addresses`
+
+Only integer scalars are considered, and a field with an explicit `overrides` entry is never touched. Point at a pairing the convention misses, or turn the whole thing off:
+
+```ts
+buildMocks(schema, {
+  qa: { lists: 'empty', countFields: { ProductSearchResult: { hitTotal: 'results' } } },
+});
+
+buildMocks(schema, { qa: { lists: 'empty', syncCounts: false } });
+```
 
 ### Notes
 
@@ -766,6 +950,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `nullChance` | `number` | `0` | Probability (0–1) nullable fields are `null` |
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
 | `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
+| `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
@@ -775,3 +960,4 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |
+| `argOverrides` | `ArgOverride[]` | `[]` | Answer one field by its argument values — see [Selections that differ only by an argument](#selections-that-differ-only-by-an-argument) |

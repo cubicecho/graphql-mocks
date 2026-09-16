@@ -28,7 +28,7 @@ function mergeQa(base: QaOption | undefined, next: QaOption): QaOption | undefin
 }
 
 /**
- * Merge a two-level map (`overrides`, `relations`) — per type, then per field. Reserved keys
+ * Merge a two-level map (`overrides`, `derive`, `relations`) — per type, then per field. Reserved keys
  * (`_default`, `_reciprocal`) and the flat forms carry no per-field structure, so they assign.
  */
 function mergeTwoLevel(base: unknown, next: unknown): unknown {
@@ -90,6 +90,7 @@ export function mergeScenarios(layers: readonly (Scenario | BuildMocksOptions)[]
           merged.scalars = { ...(merged.scalars as Layer), ...(value as Layer) };
           scalarsAt = index;
           break;
+        case 'derive':
         case 'overrides':
         case 'relations':
           merged[key] = mergeTwoLevel(merged[key], value);
