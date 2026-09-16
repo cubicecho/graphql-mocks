@@ -309,6 +309,8 @@ mocks.dataForOperation(parse('{ products(skip: 10, take: 5) { results { id } } }
 
 The list is drawn from the entity's own pool, in stable order — the same switch a direct list field makes when it is paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper itself is never mutated.
 
+One length is not a sample: a wrapper whose list is **empty** holds nothing, and paging it returns nothing. Nothing draws `[]` from a non-empty pool unless something asked for nothing — `qa: { lists: 'empty' }`, or a `relations` entry of `0` or `null` — so an empty state stays an empty state here.
+
 Relay connections are recognized too: `edges` are filtered and paged by their `node`, rebuilt as edges (cursors and all), and `pageInfo` is brought in line with the page — `hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, but only the keys the schema actually declares.
 
 The list is found by explicit config first, then the Relay shape, then **exactly one** object-typed list field. "Exactly one" is the safeguard: with two lists there is no way to tell which one `take` refers to, so nothing is guessed and the wrapper comes back as before. Scalar lists (`tags: [String!]`) are fields of the wrapper, not its rows, and don't count.
@@ -711,6 +713,12 @@ const sets = buildQaSets(schema, { seed: 42, profiles: ['emptyText', 'hugeLists'
 | `kitchenSink` | all of the above | Everything at once |
 
 `QA_PROFILE_NAMES` and `QA_PROFILES` are exported if you want to build the list yourself.
+
+`emptyLists` empties the lists the graph already wired, and stays empty under [argument matching](#argument-matching): a wrapper whose list holds nothing is a wrapper that holds nothing, so paging it returns nothing rather than reaching past it to the entity pool. To empty a type everywhere it appears — rather than emptying the lists that point at it — set its pool to zero instead, which is coherent through every path on its own:
+
+```ts
+buildMocks(schema, { count: { Product: 0 } });
+```
 
 ### With Storybook + Apollo
 

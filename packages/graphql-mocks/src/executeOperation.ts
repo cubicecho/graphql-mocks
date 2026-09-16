@@ -262,6 +262,22 @@ function unwrapListArgs(
   const wrapper = pickRelated(items, SINGULAR_BOUNDS, false, ctx.resolved.faker);
   if (!isRecord(wrapper)) return undefined;
 
+  // An emptied list is the one size that cannot be a sample. Every other length is a draw from
+  // the pool, which is why paging reaches past it to the pool itself — but no draw returns `[]`
+  // from a non-empty pool unless something asked for nothing: a `lists: 'empty'` profile, a
+  // `relations` entry of 0 or null. Reaching past *that* answers an empty-state story with rows
+  // sitting next to a total of zero, the one screen the profile exists to produce.
+  const wired = wrapper[target.fieldName];
+  if (Array.isArray(wired) && wired.length === 0) {
+    if (target.edgeTypeName === undefined) return { ...wrapper };
+    const emptyPageInfo = syncPageInfo(wrapper, [], 0, 0);
+    return {
+      ...wrapper,
+      [target.fieldName]: [],
+      ...(emptyPageInfo ? { pageInfo: emptyPageInfo } : {}),
+    };
+  }
+
   const entities = ctx.pool[target.entityType.name] ?? [];
   const rotated = plan.partitionKey
     ? partitionWindow(entities, plan.partitionKey, entities.length)
@@ -273,7 +289,6 @@ function unwrapListArgs(
   // A partition selects nothing, it only says *which* rows — so the list stays the length the
   // wrapper was wired with and only its window moves. Without this, an argument that nothing
   // could interpret would swap a four-row panel for the entire pool.
-  const wired = wrapper[target.fieldName];
   const windowed =
     !plan.hasFilters && !plan.hasPaging && Array.isArray(wired)
       ? filtered.slice(0, wired.length)
