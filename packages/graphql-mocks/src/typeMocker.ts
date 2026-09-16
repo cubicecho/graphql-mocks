@@ -1,4 +1,3 @@
-import type { Faker } from '@faker-js/faker';
 import {
   type GraphQLNamedType,
   type GraphQLObjectType,
@@ -8,8 +7,9 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
+import { qaFallbackText, qaListLength } from './qa.js';
+import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
-import type { BuildMocksOptions } from './types.js';
 
 export interface UnwrappedType {
   namedType: GraphQLNamedType;
@@ -47,20 +47,28 @@ export function unwrapType(type: GraphQLType): UnwrappedType {
 /**
  * Phase 1: Generate a single mock object for an object type, populating
  * only scalar and enum fields. Relationship fields are left for phase 2.
+ *
+ * `index` is the instance's position in its own pool; it reaches overrides through their
+ * context argument, so an override can vary by instance without tracking its own counter.
  */
 export function mockTypeScalars(
   typeDef: GraphQLObjectType,
-  faker: Faker,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
+  index = 0,
 ): Record<string, unknown> {
   const fields = typeDef.getFields();
   const result: Record<string, unknown> = {};
-  const typeOverrides = options.overrides?.[typeDef.name] ?? {};
-  const nullChance = options.nullChance ?? 0;
+  const { faker, qa, qaScalars, nullChance } = resolved;
+  const typeOverrides = resolved.overrides[typeDef.name] ?? {};
+  const listLength = qaListLength(qa, { min: 1, max: 3 });
 
   for (const [fieldName, field] of Object.entries(fields)) {
     if (typeOverrides[fieldName]) {
-      result[fieldName] = typeOverrides[fieldName]?.(faker);
+      result[fieldName] = typeOverrides[fieldName]?.(faker, {
+        index,
+        typeName: typeDef.name,
+        fieldName,
+      });
       continue;
     }
 
@@ -78,7 +86,7 @@ export function mockTypeScalars(
     if (isEnumType(namedType)) {
       const values = namedType.getValues();
       if (isList) {
-        const count = faker.number.int({ min: 1, max: 3 });
+        const count = faker.number.int(listLength);
         result[fieldName] = Array.from(
           { length: count },
           () => faker.helpers.arrayElement(values)?.value ?? null,
@@ -89,19 +97,22 @@ export function mockTypeScalars(
       continue;
     }
 
-    const mocker = resolveScalarMocker(namedType.name, options.scalars);
+    const mocker = resolveScalarMocker(namedType.name, resolved.scalars, qaScalars);
     if (!mocker) {
       console.warn(
         `[graphql-mocks] Unknown scalar "${namedType.name}" on ${typeDef.name}.${fieldName} — falling back to faker.lorem.word()`,
       );
+      // An unrecognized scalar is almost always string-shaped, so a text profile should
+      // reach it too — otherwise QA mode quietly skips every custom scalar in the schema.
+      const fallback = () => qaFallbackText(faker, qa) ?? faker.lorem.word();
       result[fieldName] = isList
-        ? Array.from({ length: faker.number.int({ min: 1, max: 3 }) }, () => faker.lorem.word())
-        : faker.lorem.word();
+        ? Array.from({ length: faker.number.int(listLength) }, fallback)
+        : fallback();
       continue;
     }
 
     result[fieldName] = isList
-      ? Array.from({ length: faker.number.int({ min: 1, max: 3 }) }, () => mocker(faker))
+      ? Array.from({ length: faker.number.int(listLength) }, () => mocker(faker))
       : mocker(faker);
   }
 

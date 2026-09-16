@@ -1,7 +1,9 @@
 import { faker } from '@faker-js/faker';
 import { buildSchema, isObjectType } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
+import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
+import type { BuildMocksOptions } from './types.js';
 
 const simpleSchema = buildSchema(`
   enum Status { ACTIVE INACTIVE }
@@ -17,6 +19,11 @@ const simpleSchema = buildSchema(`
   }
 `);
 
+// mockTypeScalars consumes the same resolved bundle buildGraph builds, so these tests run
+// through the real resolution path instead of a hand-assembled context.
+const opts = (options: BuildMocksOptions = {}): ResolvedOptions =>
+  resolveOptions({ faker, ...options });
+
 function getType(name: string) {
   const t = simpleSchema.getType(name);
   if (!t || !isObjectType(t)) throw new Error(`Type ${name} not found`);
@@ -27,7 +34,7 @@ describe('mockTypeScalars', () => {
   const widgetType = getType('Widget');
 
   it('generates all required scalar fields', () => {
-    const result = mockTypeScalars(widgetType, faker, {});
+    const result = mockTypeScalars(widgetType, opts());
     expect(typeof result.id).toBe('string');
     expect(typeof result.name).toBe('string');
     expect(typeof result.count).toBe('number');
@@ -37,12 +44,12 @@ describe('mockTypeScalars', () => {
   });
 
   it('generates enum field from schema enum values', () => {
-    const result = mockTypeScalars(widgetType, faker, {});
+    const result = mockTypeScalars(widgetType, opts());
     expect(['ACTIVE', 'INACTIVE']).toContain(result.status);
   });
 
   it('generates list scalar fields as arrays', () => {
-    const result = mockTypeScalars(widgetType, faker, {});
+    const result = mockTypeScalars(widgetType, opts());
     expect(Array.isArray(result.tags)).toBe(true);
     expect((result.tags as string[]).length).toBeGreaterThan(0);
     for (const tag of result.tags as string[]) {
@@ -53,21 +60,52 @@ describe('mockTypeScalars', () => {
   it('populates nullable fields by default (nullChance = 0)', () => {
     // Run many times; with nullChance 0, should always populate
     for (let i = 0; i < 20; i++) {
-      const result = mockTypeScalars(widgetType, faker, {});
+      const result = mockTypeScalars(widgetType, opts());
       expect(result.maybeNull).not.toBeNull();
     }
   });
 
   it('can null nullable fields when nullChance = 1', () => {
-    const result = mockTypeScalars(widgetType, faker, { nullChance: 1 });
+    const result = mockTypeScalars(widgetType, opts({ nullChance: 1 }));
     expect(result.maybeNull).toBeNull();
   });
 
   it('applies field-level overrides', () => {
-    const result = mockTypeScalars(widgetType, faker, {
-      overrides: { Widget: { name: () => 'fixed-name' } },
-    });
+    const result = mockTypeScalars(
+      widgetType,
+      opts({
+        overrides: { Widget: { name: () => 'fixed-name' } },
+      }),
+    );
     expect(result.name).toBe('fixed-name');
+  });
+
+  it('hands an override its site and the instance index', () => {
+    const sites: unknown[] = [];
+    const resolved = opts({
+      overrides: {
+        Widget: {
+          name: (_f, ctx) => {
+            sites.push(ctx);
+            return `widget-${ctx.index}`;
+          },
+        },
+      },
+    });
+    expect(mockTypeScalars(widgetType, resolved, 0).name).toBe('widget-0');
+    expect(mockTypeScalars(widgetType, resolved, 3).name).toBe('widget-3');
+    expect(sites).toEqual([
+      { index: 0, typeName: 'Widget', fieldName: 'name' },
+      { index: 3, typeName: 'Widget', fieldName: 'name' },
+    ]);
+  });
+
+  it('defaults the index to 0 when the caller has none', () => {
+    const result = mockTypeScalars(
+      widgetType,
+      opts({ overrides: { Widget: { name: (_f, { index }) => String(index) } } }),
+    );
+    expect(result.name).toBe('0');
   });
 
   it('generates list enum fields as arrays of enum values', () => {
@@ -77,7 +115,7 @@ describe('mockTypeScalars', () => {
     `);
     const paintType = listEnumSchema.getType('Paint');
     if (!paintType || !isObjectType(paintType)) throw new Error();
-    const result = mockTypeScalars(paintType, faker, {});
+    const result = mockTypeScalars(paintType, opts());
     expect(Array.isArray(result.colors)).toBe(true);
     const colors = result.colors as string[];
     expect(colors.length).toBeGreaterThan(0);
@@ -94,7 +132,7 @@ describe('mockTypeScalars', () => {
     `);
     const fooType = unknownListSchema.getType('Foo');
     if (!fooType || !isObjectType(fooType)) throw new Error();
-    const result = mockTypeScalars(fooType, faker, {});
+    const result = mockTypeScalars(fooType, opts());
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Mystery'));
     expect(Array.isArray(result.things)).toBe(true);
     warnSpy.mockRestore();
@@ -108,16 +146,19 @@ describe('mockTypeScalars', () => {
     `);
     const fooType = unknownSchema.getType('Foo');
     if (!fooType || !isObjectType(fooType)) throw new Error();
-    const result = mockTypeScalars(fooType, faker, {});
+    const result = mockTypeScalars(fooType, opts());
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Mystery'));
     expect(typeof result.x).toBe('string');
     warnSpy.mockRestore();
   });
 
   it('uses user-provided scalar mocker over default', () => {
-    const result = mockTypeScalars(widgetType, faker, {
-      scalars: { String: () => 'custom-string' },
-    });
+    const result = mockTypeScalars(
+      widgetType,
+      opts({
+        scalars: { String: () => 'custom-string' },
+      }),
+    );
     expect(result.name).toBe('custom-string');
   });
 });

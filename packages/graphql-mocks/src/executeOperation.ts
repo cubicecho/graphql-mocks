@@ -4,6 +4,7 @@ import {
   type GraphQLInputType,
   type GraphQLNamedType,
   type GraphQLOutputType,
+  type GraphQLResolveInfo,
   type GraphQLSchema,
   defaultFieldResolver,
   executeSync,
@@ -17,8 +18,10 @@ import {
   isUnionType,
   typeFromAST,
 } from 'graphql';
+import { qaFallbackText, qaListLength } from './qa.js';
+import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
+import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
-import type { BuildMocksOptions } from './types.js';
 
 type Pool = Record<string, Record<string, unknown>[]>;
 
@@ -36,67 +39,105 @@ function unwrapOutput(type: GraphQLOutputType): { named: GraphQLNamedType; isLis
 }
 
 /** Mock a scalar/enum value for a root field or input that has no pool to draw from. */
-function mockLeaf(named: GraphQLNamedType, faker: Faker, options: BuildMocksOptions): unknown {
+function mockLeaf(named: GraphQLNamedType, resolved: ResolvedOptions): unknown {
   if (isEnumType(named)) return named.getValues()[0]?.value ?? null;
-  const mocker = resolveScalarMocker(named.name, options.scalars);
-  return mocker ? mocker(faker) : faker.lorem.word();
+  const { faker } = resolved;
+  const mocker = resolveScalarMocker(named.name, resolved.scalars, resolved.qaScalars);
+  if (mocker) return mocker(faker);
+  return qaFallbackText(faker, resolved.qa) ?? faker.lorem.word();
 }
 
-/** Resolve a root operation field to instances drawn from the mock pool by its return type. */
+/** Default sizing for a root list field, before any QA profile or `relations` entry. */
+const DEFAULT_ROOT_BOUNDS = { min: 1, max: 5 };
+/** A singular root field resolves to exactly one object; list sizing does not apply. */
+const SINGULAR_BOUNDS = { min: 1, max: 1 };
+
+/** The parts of the resolver info a root field needs — its own site, and what it returns. */
+type RootFieldInfo = Pick<GraphQLResolveInfo, 'fieldName' | 'parentType' | 'returnType'>;
+
+/**
+ * Resolve a root operation field to instances drawn from the mock pool by its return type.
+ *
+ * Root fields have no owning instance, so `relations` reaches them through the root type:
+ * `relations: { Query: { users: 3 } }`. Everything below the root follows the already-wired
+ * references instead, so it was shaped in phase 2.
+ */
 function pickFromPool(
   schema: GraphQLSchema,
-  returnType: GraphQLOutputType,
+  info: RootFieldInfo,
   pool: Pool,
-  faker: Faker,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
 ): unknown {
-  const { named, isList } = unwrapOutput(returnType);
+  const { faker } = resolved;
+  const { named, isList } = unwrapOutput(info.returnType);
+  const empty = isList ? [] : null;
+
+  const fallback = isList ? qaListLength(resolved.qa, DEFAULT_ROOT_BOUNDS) : SINGULAR_BOUNDS;
+  const spec = resolveRelation(info.parentType.name, info.fieldName, resolved.relations);
+  const bounds = relationBounds(spec, fallback);
+  if (bounds === null || bounds.max === 0) return empty;
+
+  const isAbstract = isUnionType(named) || isInterfaceType(named);
+  const concretePools = () =>
+    isAbstract ? schema.getPossibleTypes(named).flatMap((t) => pool[t.name] ?? []) : [];
+
+  // A function picks the value outright, from whichever pool backs the field.
+  if (typeof spec === 'function') {
+    const value = spec({
+      pool: isAbstract ? concretePools() : (pool[named.name] ?? []),
+      faker,
+      index: 0,
+      instance: {},
+      typeName: info.parentType.name,
+      fieldName: info.fieldName,
+      isList,
+    });
+    return isList && value === undefined ? [] : value;
+  }
 
   // Abstract types have no pool of their own — draw from a random concrete member instead.
-  if (isUnionType(named) || isInterfaceType(named)) {
+  if (isAbstract) {
     const concrete = schema.getPossibleTypes(named).filter((t) => (pool[t.name]?.length ?? 0) > 0);
-    if (concrete.length === 0) return isList ? [] : null;
+    if (concrete.length === 0) return empty;
+    // This branch draws with replacement, so `'all'` has to hand back the pools themselves.
+    if (spec === 'all' && isList) return concretePools();
     const pickOne = () => {
       const items = pool[faker.helpers.arrayElement(concrete).name];
       return items ? faker.helpers.arrayElement(items) : null;
     };
-    if (isList) return Array.from({ length: faker.number.int({ min: 1, max: 5 }) }, pickOne);
+    // Drawn with replacement across the concrete pools, so a huge length needs no pool growth.
+    if (isList) return Array.from({ length: faker.number.int(bounds) }, pickOne);
     return pickOne();
   }
 
   const items = pool[named.name];
-  if (items && items.length > 0) {
-    if (isList) {
-      return faker.helpers.arrayElements(items, { min: 1, max: Math.min(5, items.length) });
-    }
-    return faker.helpers.arrayElement(items);
-  }
+  if (items && items.length > 0) return pickRelated(items, bounds, isList, faker);
+
   // No pool entry: object type with zero instances, or a scalar/enum returned at the root.
   if (isScalarType(named) || isEnumType(named)) {
-    return isList ? [mockLeaf(named, faker, options)] : mockLeaf(named, faker, options);
+    const leaf = () => mockLeaf(named, resolved);
+    // Nothing to take "all" of without a pool, so an unbounded request keeps normal sizing.
+    const length = bounds.max === UNBOUNDED ? fallback : bounds;
+    return isList ? Array.from({ length: faker.number.int(length) }, leaf) : leaf();
   }
-  return isList ? [] : null;
+  return empty;
 }
 
 /** Build a non-null input value good enough to pass coercion (args don't affect resolution). */
-function mockRequiredInput(
-  type: GraphQLInputType,
-  faker: Faker,
-  options: BuildMocksOptions,
-): unknown {
-  if (isNonNullType(type)) return mockRequiredInput(type.ofType, faker, options);
+function mockRequiredInput(type: GraphQLInputType, resolved: ResolvedOptions): unknown {
+  if (isNonNullType(type)) return mockRequiredInput(type.ofType, resolved);
   if (isListType(type)) return []; // an empty list satisfies a non-null list type
   if (isInputObjectType(type)) {
     const value: Record<string, unknown> = {};
     for (const field of Object.values(type.getFields())) {
       // Only required fields without a default must be supplied; leave the rest unset.
       if (isNonNullType(field.type) && field.defaultValue === undefined) {
-        value[field.name] = mockRequiredInput(field.type, faker, options);
+        value[field.name] = mockRequiredInput(field.type, resolved);
       }
     }
     return value;
   }
-  return mockLeaf(type as GraphQLNamedType, faker, options);
+  return mockLeaf(type as GraphQLNamedType, resolved);
 }
 
 /**
@@ -108,8 +149,7 @@ function synthesizeVariables(
   schema: GraphQLSchema,
   document: DocumentNode,
   provided: Record<string, unknown>,
-  faker: Faker,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
 ): Record<string, unknown> {
   const operation = getOperationAST(document, undefined);
   const result: Record<string, unknown> = { ...provided };
@@ -119,7 +159,7 @@ function synthesizeVariables(
     if (varDef.defaultValue != null) continue; // a default makes it effectively optional
     if (varDef.type.kind !== 'NonNullType') continue; // nullable → leave unset
     const type = typeFromAST(schema, varDef.type);
-    if (type) result[name] = mockRequiredInput(type, faker, options);
+    if (type) result[name] = mockRequiredInput(type, resolved);
   }
   return result;
 }
@@ -132,8 +172,7 @@ function synthesizeVariables(
 export function resolveOperationData(
   schema: GraphQLSchema,
   pool: Pool,
-  faker: Faker,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
   document: DocumentNode,
   variables?: Record<string, unknown>,
 ): unknown {
@@ -147,11 +186,11 @@ export function resolveOperationData(
     schema,
     document,
     rootValue: {},
-    variableValues: synthesizeVariables(schema, document, variables ?? {}, faker, options),
+    variableValues: synthesizeVariables(schema, document, variables ?? {}, resolved),
     // Root fields draw from the pool; nested fields read the wired references via the default.
     fieldResolver: (source, args, context, info) =>
       rootTypeNames.has(info.parentType.name)
-        ? pickFromPool(schema, info.returnType, pool, faker, options)
+        ? pickFromPool(schema, info, pool, resolved)
         : defaultFieldResolver(source, args, context, info),
     // Abstract types (interface/union) resolve via the __typename carried by every mock.
     typeResolver: (value) =>
