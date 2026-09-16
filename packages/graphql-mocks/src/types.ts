@@ -218,6 +218,18 @@ export interface BuildMocksOptions<
    */
   relations?: RelationsConfig<TTypes>;
   /**
+   * One or more {@link Scenario} layers to build on. Applied left to right, with these
+   * options merged last — so an explicit `count` here always wins over a scenario's.
+   *
+   * ```ts
+   * buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], seed: 42 });
+   * ```
+   *
+   * Maps merge key by key (`count`, `overrides`, `relations`, `scalars`, and the QA
+   * dimensions); everything else is last-one-wins.
+   */
+  scenario?: Scenario<TTypes> | Scenario<TTypes>[];
+  /**
    * Required when the schema has interface or union fields.
    * Return the concrete type name to use when mocking a field of that abstract type.
    */
@@ -254,6 +266,25 @@ export interface BuildMocksOptions<
    */
   stableIds?: boolean;
 }
+
+/**
+ * A named, reusable bundle of build options — "a new user with nothing", "a workspace at
+ * scale". Everything `buildMocks` takes except the reproducibility controls: `faker` and
+ * `seed` stay with the call site, so a scenario can be reused under any seed.
+ */
+export type Scenario<TTypes extends Record<string, unknown> = Record<string, unknown>> = Omit<
+  BuildMocksOptions<TTypes>,
+  'faker' | 'seed' | 'scenario'
+> & {
+  /** What this scenario is for. Carried through composition; ignored by the generator. */
+  description?: string;
+};
+
+/** Scenarios by name, as `defineScenarios` returns them. */
+export type ScenarioMap<TTypes extends Record<string, unknown> = Record<string, unknown>> = Record<
+  string,
+  Scenario<TTypes>
+>;
 
 export interface MockHelpers<TTypes extends Record<string, unknown> = Record<string, unknown>> {
   /**

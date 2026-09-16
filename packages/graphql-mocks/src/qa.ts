@@ -41,16 +41,26 @@ export interface ResolvedQa extends QaConfig {
 }
 
 /**
+ * Expand a profile name to its preset config, leaving an explicit config (or `false`) alone.
+ * Split out so scenario merging and QA resolution share one expansion and one warning.
+ */
+export function expandQaOption(qa: QaOption | undefined): QaConfig | false | undefined {
+  if (qa === undefined || qa === false || typeof qa !== 'string') return qa;
+  const preset = QA_PROFILES[qa];
+  if (!preset) {
+    console.warn(`[graphql-mocks] Unknown qa profile "${String(qa)}" — QA mode disabled`);
+    return undefined;
+  }
+  return preset;
+}
+
+/**
  * Normalize the `qa` option into a single config. A profile name expands to its preset;
  * an object is used as-is. Returns undefined when QA mode is off.
  */
 export function resolveQa(qa: QaOption | undefined): ResolvedQa | undefined {
-  if (qa === undefined || qa === false) return undefined;
-  const config = typeof qa === 'string' ? QA_PROFILES[qa] : qa;
-  if (!config) {
-    console.warn(`[graphql-mocks] Unknown qa profile "${String(qa)}" — QA mode disabled`);
-    return undefined;
-  }
+  const config = expandQaOption(qa);
+  if (!config) return undefined;
   return { ...config, listSize: config.listSize ?? DEFAULT_HUGE_LIST_SIZE };
 }
 

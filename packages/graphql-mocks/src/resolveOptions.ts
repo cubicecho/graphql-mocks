@@ -1,6 +1,7 @@
 import type { Faker } from '@faker-js/faker';
 import { resolveFaker } from './helpers.js';
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
+import { applyScenarios } from './scenarios.js';
 import type {
   BuildMocksOptions,
   CountConfig,
@@ -42,7 +43,9 @@ export interface ResolvedOptions {
 }
 
 /** Normalize caller options into the resolved shape. Seeds `faker` as a side effect. */
-export function resolveOptions(options: BuildMocksOptions): ResolvedOptions {
+export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
+  // Scenario layers first, so everything below reads one already-merged config.
+  const options = applyScenarios(rawOptions);
   const faker = resolveFaker(options);
   const qa = resolveQa(options.qa);
 
