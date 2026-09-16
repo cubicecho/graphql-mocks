@@ -40,6 +40,85 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/**
+ * How many related objects a relationship field gets. A number is an exact size, a
+ * `{ min, max }` range picks a random size in between, `'all'` takes the whole target pool,
+ * and `null` means none — `[]` for a list field, `null` for a singular one.
+ */
+export type RelationSize = number | { min: number; max: number } | null | 'all';
+
+/** What a {@link RelationFn} is handed when it computes a relationship field's value. */
+export interface RelationContext {
+  /** The target type's pool, already fully populated — relationships wire after every
+   * instance exists, which is what `overrides` cannot do. */
+  pool: readonly unknown[];
+  /** The same seeded faker the generator draws with, so the function stays deterministic. */
+  faker: Faker;
+  /** The owning instance's index in its own pool — 0-based, and 0 at an operation root. */
+  index: number;
+  /** The owning instance so far: its own scalar fields, before relationships are wired. */
+  instance: Record<string, unknown>;
+  /** The owning type's name (or the root operation type on the operation path). */
+  typeName: string;
+  /** The field being wired. */
+  fieldName: string;
+  /** Whether the field is a list — return an array when true, one object or null otherwise. */
+  isList: boolean;
+}
+
+/**
+ * Full control over a single relationship field. Returns the field's **value**, not a size,
+ * so it can choose *which* entities are connected rather than just how many:
+ *
+ * ```ts
+ * relations: { Post: { author: ({ pool }) => pool[0] } }
+ * ```
+ */
+export type RelationFn = (ctx: RelationContext) => unknown;
+
+/** A size, or a function that computes the field value outright. */
+export type RelationSpec = RelationSize | RelationFn;
+
+// Relationship specs for one type, keyed by field name, with a `_default` for that type's
+// other relationship fields. Degrades to a loose record when the type's shape is unknown,
+// mirroring `FieldOverrides`.
+type TypeRelations<T> = unknown extends T
+  ? { _default?: RelationSpec } & Record<string, RelationSpec>
+  : { _default?: RelationSpec } & { [F in keyof T]?: RelationSpec };
+
+/** The untyped `relations` map: any type name, any field name. */
+export interface LooseRelationsMap {
+  /** Applies to any relationship field without a type- or field-level entry. */
+  _default?: RelationSpec;
+  /**
+   * Also write each wired relationship back onto its inverse field, so `user.todos[i].user`
+   * is that same user. Lossy where an object is shared by two owners — last writer wins.
+   * @default false
+   */
+  _reciprocal?: boolean;
+  [typeName: string]: TypeRelations<unknown> | RelationSpec | boolean | undefined;
+}
+
+/** The `relations` map when a `TTypes` map is supplied: type and field names are checked. */
+export type TypedRelationsMap<TTypes extends Record<string, unknown>> = {
+  _default?: RelationSpec;
+  _reciprocal?: boolean;
+} & { [K in keyof TTypes]?: TypeRelations<TTypes[K]> };
+
+/**
+ * How relationship fields are wired, resolved per field as
+ * `[type][field]` → `[type]._default` → `_default` → the flat form.
+ *
+ * A bare object is **always** a type map, never a `{ min, max }` range — ranges live under a
+ * key, so the catch-all range is written `relations: { _default: { min: 1, max: 5 } }`.
+ */
+export type RelationsConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> =
+  | number
+  | null
+  | 'all'
+  | RelationFn
+  | (string extends keyof TTypes ? LooseRelationsMap : TypedRelationsMap<TTypes>);
+
 /** How string-shaped scalars behave under QA mode. */
 export type QaTextProfile = 'empty' | 'whitespace' | 'long' | 'unicode' | 'injection';
 /** How numeric scalars behave under QA mode. */
