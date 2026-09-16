@@ -331,6 +331,32 @@ const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(han
 // …assert on handler.calls
 ```
 
+#### `createMockClient`
+
+The three lines above are the same three lines in every story file and every test helper, so
+there's a factory for them:
+
+```tsx
+import { createMockClient } from '@vantreeseba/graphql-mocks/apollo';
+
+const client = createMockClient(mocks, { delay: 300, matchArguments: true });
+```
+
+It takes everything `mockLink` takes, plus `cache`, `link`, `defaultOptions` and `clientOptions`
+for the client itself. Two defaults are worth knowing about, both overridable:
+
+- **A fresh `InMemoryCache` per call.** Story isolation shouldn't be something you have to know
+  to ask for.
+- **`fetchPolicy: 'no-cache'` and `errorPolicy: 'all'`** for `query` and `watchQuery`. The point
+  of a mock client is to see what the mocks return, and an error state is a state to render, not
+  a rejected promise nobody catches. `defaultOptions` merges over these per operation kind and
+  then per key, so `{ query: { fetchPolicy: 'cache-first' } }` keeps the rest.
+
+Pass a *factory* — `(options) => buildMocks(schema, { ...defaults, ...options })` — instead of a
+built graph when something downstream needs to rebuild the graph with different options. Graphs
+built that way are memoized per config, so re-renders reuse them rather than reshuffling every
+pool.
+
 ## Story states
 
 `mockScenarios` builds the three states a component is usually exercised in, from one base config:
@@ -350,49 +376,68 @@ mockScenarios({}, ['UserById', TodosQuery]); // several
 mockScenarios({}, (op) => op.operationType === 'mutation');
 ```
 
-There's no Storybook dependency and no CSF types here — the parameter key and the spread into a story belong to your Storybook addon, which churns across majors. A decorator is a few lines:
+### The Storybook decorator
+
+`withGraphqlMocks` is that trio wired to a story parameter. It stays React-free — the renderer
+churns across Storybook majors, so `wrap` is yours — but the parameter parsing, the scenarios and
+the client memo are not yours to write:
 
 ```tsx
 // .storybook/preview.tsx
-import { ApolloClient, ApolloProvider, InMemoryCache } from '@apollo/client';
+import { ApolloProvider } from '@apollo/client';
 import { buildMocks } from '@vantreeseba/graphql-mocks';
-import { mockLink } from '@vantreeseba/graphql-mocks/apollo';
+import { withGraphqlMocks } from '@vantreeseba/graphql-mocks/apollo';
 import { schema } from './schema';
 
 export const decorators = [
-  (Story, context) => {
-    const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
-    const client = new ApolloClient({
-      cache: new InMemoryCache(),
-      link: mockLink(mocks, context.parameters.graphqlMocks ?? {}),
-    });
-    return (
-      <ApolloProvider client={client}>
-        <Story />
-      </ApolloProvider>
-    );
-  },
+  withGraphqlMocks(
+    (options) => buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true, ...options }),
+    {
+      wrap: (client, Story) => (
+        <ApolloProvider client={client}>
+          <Story />
+        </ApolloProvider>
+      ),
+    },
+  ),
 ];
 ```
 
 ```tsx
 // SomeScreen.stories.tsx
-const states = mockScenarios({}, 'UserById');
-
-export const Default = { parameters: { graphqlMocks: states.default } };
-export const Loading = { parameters: { graphqlMocks: states.loading } };
-export const Errored = { parameters: { graphqlMocks: states.errored } };
+export const Default = {};                                              // no parameter needed
+export const Loading = { parameters: { graphqlMocks: 'loading' } };
+export const Errored = { parameters: { graphqlMocks: 'errored' } };
+export const OnePanelFailing = {
+  parameters: { graphqlMocks: { state: 'errored', target: 'UserById' } },
+};
+export const Empty = { parameters: { graphqlMocks: { build: { count: 0 } } } };
+export const LongText = { parameters: { graphqlMocks: { qa: 'longText' } } };
+export const Slow = { parameters: { graphqlMocks: { delay: 2000 } } };
+export const Unmocked = { parameters: { graphqlMocks: false } };
 ```
+
+The parameter is `true | 'loading' | 'errored' | { state, target, build, qa, ...handler options }`,
+or `false` to opt one story out. Options passed to `withGraphqlMocks` itself are the base every
+story is layered over — plain options key by key, `overrides` concatenated with the story's first.
+
+`build` and `qa` need the factory form of the source (as above); with an already-built graph
+there's nothing to rebuild and they warn. Clients are memoized per resolved parameter, so a
+control knob re-rendering a story reuses its client instead of remounting into a fresh cache.
+
+`resolveMockClient(source, parameter, base)` is the same resolution without the decorator, for
+a renderer `wrap` doesn't fit.
 
 The same shape works in component tests:
 
 ```tsx
-import { type MockHandlerOptions, buildMocks } from '@vantreeseba/graphql-mocks';
+import { buildMocks } from '@vantreeseba/graphql-mocks';
+import { type MockHandlerOptions, createMockClient } from '@vantreeseba/graphql-mocks/apollo';
 
 function renderWithMocks(ui: React.ReactElement, options: MockHandlerOptions = {}) {
   const mocks = buildMocks(schema, { seed: 1, stableIds: true, matchArguments: true });
   const handler = mocks.toRequestHandler(options);
-  const client = new ApolloClient({ cache: new InMemoryCache(), link: mockLink(handler) });
+  const client = createMockClient(handler);
   return { mocks, handler, ...render(<ApolloProvider client={client}>{ui}</ApolloProvider>) };
 }
 ```
@@ -501,6 +546,9 @@ export const QaVariants = sets.map((set) => ({
   parameters: { apolloClient: { mocks: [set.mocks.mockOperation(UsersQuery)] } },
 }));
 ```
+
+For a single story, the [decorator](#the-storybook-decorator) takes a profile directly —
+`parameters: { graphqlMocks: { qa: 'emptyText' } }` — and builds that graph once.
 
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
