@@ -43,6 +43,15 @@ export interface OverrideContext {
 export type FieldOverrideFn<T = unknown> = (faker: Faker, ctx: OverrideContext) => T;
 
 /**
+ * Which count scalars track which lists. `true` pairs them by name alone; a map pairs the ones
+ * the naming convention misses, keyed by type, then by count field, with the list field as the
+ * value. `false` turns the pass off, including under a QA list profile.
+ */
+export type CountFieldsConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> =
+  | boolean
+  | { [K in keyof TTypes]?: Record<string, string> };
+
+/**
  * Per-type instance counts. When `TTypes` is supplied, the keys autocomplete to the schema's
  * type names and typos are caught; otherwise any type name is accepted. `_default` applies to
  * any type without an explicit entry.
@@ -396,6 +405,32 @@ export interface BuildMocksOptions<
    * Applies to pooled instances, which is what every operation draws from.
    */
   derive?: DeriveConfig<TTypes>;
+  /**
+   * Keep count scalars in step with the lists they count, and size those lists to the whole pool
+   * of what they hold — the one size at which a wrapper's total and its pageable rows agree:
+   *
+   * ```ts
+   * buildMocks(schema, {
+   *   count: { _default: 40 },
+   *   countFields: true, // ProductSearchResult.totalCount -> results.length, results -> all 40
+   * });
+   * ```
+   *
+   * `true` pairs by name: `totalCount`/`total`/`resultCount` and friends on a type with one list
+   * field, or `postCount`/`numberOfPosts`/`totalPosts` naming the list directly. A Relay
+   * connection pairs the same way — `totalCount` against `edges`. Pass a map for the pairings the
+   * convention misses, which also turns the pass on:
+   *
+   * ```ts
+   * countFields: { ProductSearchResult: { hitTotal: 'results' } }
+   * ```
+   *
+   * A field with an explicit `overrides` entry is left alone, a `derive` for the same field still
+   * wins (it runs after), and an explicit `relations` size for the list still decides its length.
+   * Under a QA `lists` profile the profile owns the sizing and this only syncs the counts, so an
+   * emptied list reports zero. `false` turns the whole pass off.
+   */
+  countFields?: CountFieldsConfig<TTypes>;
   /**
    * One or more {@link Scenario} layers to build on. Applied left to right, with these
    * options merged last — so an explicit `count` here always wins over a scenario's.

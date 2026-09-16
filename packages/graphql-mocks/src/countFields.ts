@@ -1,5 +1,4 @@
 import { type GraphQLObjectType, isEnumType, isScalarType } from 'graphql';
-import type { ResolvedQa } from './qa.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { unwrapType } from './typeMocker.js';
 
@@ -17,6 +16,11 @@ import { unwrapType } from './typeMocker.js';
  *
  * This module pairs a count scalar with the list it counts and rewrites it to that list's
  * actual length, so all three profiles stay internally consistent.
+ *
+ * The same pairing is worth having outside QA mode, which is what the top-level `countFields`
+ * option turns on: a wrapper type's `totalCount` is only meaningful next to a `results` that
+ * holds the whole pool it is a total of, and hand-wiring that takes a `relations` size and a
+ * `derive` that have to agree on a number written twice.
  */
 
 /**
@@ -87,12 +91,63 @@ export function classifyCountField(
   return generic ? { generic } : undefined;
 }
 
+/**
+ * The count-syncing pass in force for a build, or `null` when it is off. The top-level option
+ * decides outright when it is set — including `false`, which turns the pass off under a QA list
+ * profile too — and otherwise a `lists` profile turns it on to repair what it resized.
+ */
+export interface CountSync {
+  /** Explicit `count field -> list field` pairings, per type. */
+  explicit: Record<string, Record<string, string>>;
+  /** What to call the option in a warning, since two of them reach this code. */
+  option: 'countFields' | 'qa.countFields';
+  /** How to turn the pass off, for the same warnings. */
+  disable: string;
+  /**
+   * Whether a paired list should be sized to its element pool. A QA list profile owns list
+   * sizing — that is the whole point of the profile — so this is only true outside one.
+   */
+  sizeLists: boolean;
+}
+
+export function resolveCountSync(resolved: ResolvedOptions): CountSync | null {
+  const { countFields, qa } = resolved;
+
+  const explicit: Record<string, Record<string, string>> = {};
+  for (const [typeName, pairs] of Object.entries(qa?.countFields ?? {})) {
+    explicit[typeName] = { ...pairs };
+  }
+  if (typeof countFields === 'object') {
+    for (const [typeName, pairs] of Object.entries(countFields)) {
+      explicit[typeName] = { ...explicit[typeName], ...pairs };
+    }
+  }
+
+  // The top-level option decides outright, whichever way it points.
+  if (countFields === false) return null;
+  if (countFields !== undefined) {
+    return {
+      explicit,
+      option: 'countFields',
+      disable: 'countFields: false',
+      sizeLists: !qa?.lists,
+    };
+  }
+
+  // Only a list profile creates the contradiction, so only a list profile repairs it.
+  if (!qa?.lists || qa.syncCounts === false) return null;
+  return { explicit, option: 'qa.countFields', disable: 'qa.syncCounts: false', sizeLists: false };
+}
+
 /** `[countFieldName, listFieldName]` pairs for one type, most specific source first. */
 export function pairCountFields(
   objectType: GraphQLObjectType,
-  qa: ResolvedQa,
+  sync: CountSync,
   overrides: Record<string, unknown>,
+  /** Off for the phase 2 pass, which walks the same pairings before the lists exist. */
+  warn = true,
 ): [string, string][] {
+  const report = warn ? (message: string) => console.warn(message) : () => {};
   const listFields: string[] = [];
   const countCandidates: string[] = [];
 
@@ -107,7 +162,7 @@ export function pairCountFields(
     if (isIntScalar) countCandidates.push(fieldName);
   }
 
-  const explicit = qa.countFields?.[objectType.name] ?? {};
+  const explicit = sync.explicit[objectType.name] ?? {};
   const pairs: [string, string][] = [];
   const claimed = new Set<string>();
 
@@ -115,14 +170,14 @@ export function pairCountFields(
   // it names a field that isn't there rather than quietly doing nothing.
   for (const [countField, listField] of Object.entries(explicit)) {
     if (!(countField in objectType.getFields())) {
-      console.warn(
-        `[graphql-mocks] qa.countFields: "${objectType.name}.${countField}" is not a field on that type`,
+      report(
+        `[graphql-mocks] ${sync.option}: "${objectType.name}.${countField}" is not a field on that type`,
       );
       continue;
     }
     if (!listFields.includes(listField)) {
-      console.warn(
-        `[graphql-mocks] qa.countFields: "${objectType.name}.${listField}" is not a list field, so "${countField}" has nothing to count`,
+      report(
+        `[graphql-mocks] ${sync.option}: "${objectType.name}.${listField}" is not a list field, so "${countField}" has nothing to count`,
       );
       continue;
     }
@@ -134,7 +189,7 @@ export function pairCountFields(
 
   for (const countField of countCandidates) {
     if (claimed.has(countField)) continue;
-    // An explicit `overrides` entry is a deliberate value; the QA profile doesn't outrank it.
+    // An explicit `overrides` entry is a deliberate value; an inferred pairing doesn't outrank it.
     if (overrides[countField] !== undefined) continue;
 
     const classified = classifyCountField(countField);
@@ -156,12 +211,30 @@ export function pairCountFields(
       continue;
     }
 
-    console.warn(
-      `[graphql-mocks] qa: "${objectType.name}.${countField}" looks like a count but ${objectType.name} has ${listFields.length} list fields, so the pairing is ambiguous — set qa.countFields to pair it, or qa.syncCounts: false to silence this`,
+    report(
+      `[graphql-mocks] ${sync.option}: "${objectType.name}.${countField}" looks like a count but ${objectType.name} has ${listFields.length} list fields, so the pairing is ambiguous — pair it explicitly, or set ${sync.disable} to silence this`,
     );
   }
 
   return pairs;
+}
+
+/**
+ * The list fields of `objectType` that some count scalar counts, and so should hold the whole
+ * pool of what they point at. Read during phase 2, before anything is wired — a count over a
+ * six-item sample of a forty-item pool is a number no pager can page through.
+ *
+ * Silent here: phase 4 walks the same pairings and warns there, once the lists are final.
+ */
+export function countedListFields(
+  objectType: GraphQLObjectType,
+  resolved: ResolvedOptions,
+): Set<string> {
+  const sync = resolveCountSync(resolved);
+  if (!sync?.sizeLists) return new Set();
+  const overrides = resolved.overrides[objectType.name] ?? {};
+  const pairs = pairCountFields(objectType, sync, overrides, false);
+  return new Set(pairs.map(([, listField]) => listField));
 }
 
 /**
@@ -173,15 +246,14 @@ export function syncCountFields(
   pool: Record<string, Record<string, unknown>[]>,
   resolved: ResolvedOptions,
 ): void {
-  const { qa } = resolved;
-  // Only a list profile creates the contradiction, so only a list profile repairs it.
-  if (!qa?.lists || qa.syncCounts === false) return;
+  const sync = resolveCountSync(resolved);
+  if (!sync) return;
 
   for (const objectType of objectTypes) {
     const instances = pool[objectType.name] ?? [];
     if (instances.length === 0) continue;
 
-    const pairs = pairCountFields(objectType, qa, resolved.overrides[objectType.name] ?? {});
+    const pairs = pairCountFields(objectType, sync, resolved.overrides[objectType.name] ?? {});
     if (pairs.length === 0) continue;
 
     for (const instance of instances) {

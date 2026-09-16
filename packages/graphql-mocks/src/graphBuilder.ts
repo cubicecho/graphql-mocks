@@ -14,7 +14,7 @@ import {
   mockOperationVariants as buildMockOperationVariants,
   variablesForData,
 } from './apolloMocks.js';
-import { syncCountFields } from './countFields.js';
+import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
@@ -109,6 +109,9 @@ function planRelationFields(
 ): FieldPlan[] {
   const plans: FieldPlan[] = [];
   const overrides = resolved.overrides[objectType.name] ?? {};
+  // A list some count scalar counts holds the whole pool of what it points at, so the count and
+  // the rows an argument-matched query pages through are totals of the same thing.
+  const counted = countedListFields(objectType, resolved);
 
   /** Finish a plan against the pool it draws from, warning once per site about the result. */
   const commit = (
@@ -157,7 +160,9 @@ function planRelationFields(
     // Scalars and enums were already generated in phase 1.
     if (isScalarType(namedType) || isEnumType(namedType)) continue;
 
-    const spec = resolveRelation(objectType.name, fieldName, resolved.relations);
+    // An explicit `relations` entry is the more specific lever and still decides the size.
+    const relation = resolveRelation(objectType.name, fieldName, resolved.relations);
+    const spec = relation === undefined && isList && counted.has(fieldName) ? 'all' : relation;
     const fallback = isList ? qaListLength(resolved.qa, resolved.listSize) : SINGULAR_BOUNDS;
     const plan = { fieldName, isRequired, isList, spec, bounds: relationBounds(spec, fallback) };
 
@@ -544,7 +549,8 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
     );
   }
 
-  // Phase 4: a QA list profile resized the lists; bring their count scalars back in step.
+  // Phase 4: bring count scalars in step with the lists they count — the lists a QA profile
+  // resized, or the ones phase 2 sized to their pool for `countFields`.
   syncCountFields(objectTypes, pool, resolved);
 
   // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
