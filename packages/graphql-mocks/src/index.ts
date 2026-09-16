@@ -1,6 +1,10 @@
 export { mockOperation, mockOperationVariants } from './apolloMocks.js';
 export type {
+  AnyMockedResponse,
+  DynamicMockOperationVariants,
+  DynamicMockedResponse,
   MockedResponse,
+  MockOperationData,
   MockOperationOptions,
   MockOperationVariants,
   VariableMatcher,

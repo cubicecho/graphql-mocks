@@ -1,5 +1,6 @@
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { type DocumentNode, Kind } from 'graphql';
+import type { ArgMatchingOptions } from './argMatching.js';
 
 /**
  * Reduce `options.variables` to concrete variables for pool-based data resolution: a matcher
@@ -35,7 +36,32 @@ export interface MockedResponse<TData = unknown, TVars = unknown> {
   maxUsageCount?: number;
 }
 
-export interface MockOperationOptions<TVars = unknown> {
+/**
+ * Like {@link MockedResponse}, but `result` is a function of the incoming variables — Apollo
+ * calls it per request, so one mock can answer many variable combinations. Kept as a sibling
+ * type instead of widening `MockedResponse['result']` to a union, because a union would break
+ * every existing `mock.result?.data` read.
+ */
+export interface DynamicMockedResponse<TData = unknown, TVars = unknown> {
+  request: {
+    query: DocumentNode;
+    variables?: TVars | VariableMatcher<TVars>;
+  };
+  result?: (variables: TVars) => { data?: TData };
+  error?: Error;
+  delay?: number;
+  maxUsageCount?: number;
+}
+
+/** Either response shape — useful when a value's staticness isn't known at the type level. */
+export type AnyMockedResponse<TData = unknown, TVars = unknown> =
+  | MockedResponse<TData, TVars>
+  | DynamicMockedResponse<TData, TVars>;
+
+/** The `data` argument of {@link mockOperation}: a value, or a function of the variables. */
+export type MockOperationData<TData, TVars> = TData | ((variables: TVars) => TData);
+
+export interface MockOperationOptions<TVars = unknown, TData = unknown> {
   /**
    * Variables to match: concrete variables for an exact match, or a predicate.
    * Defaults to a predicate that matches any variables, so a mock satisfies the
@@ -51,6 +77,26 @@ export interface MockOperationOptions<TVars = unknown> {
    * Defaults to `Infinity` so one mock covers any number of renders/refetches.
    */
   maxUsageCount?: number;
+  /**
+   * Graph-bound forms only (`mocks.mockOperation` / `mocks.mockOperationVariants`).
+   * Resolve the data per request from the incoming variables instead of once up front, which
+   * lets a single mock answer many variable combinations — pair it with `matchArguments` so
+   * the variables actually select the data.
+   *
+   * Off by default: flipping `result` to a function would break `mock.result?.data` reads.
+   * @default false
+   */
+  dynamic?: boolean;
+  /**
+   * Graph-bound forms only. Post-process the resolved data before it becomes the result —
+   * for slicing, filtering or patching a field the generator can't know about.
+   */
+  transform?: (data: TData, variables: TVars) => TData;
+  /**
+   * Graph-bound forms only. Per-call override of `BuildMocksOptions.matchArguments`, so one
+   * operation can honor its arguments without turning matching on for the whole graph.
+   */
+  matchArguments?: boolean | ArgMatchingOptions;
 }
 
 /** Delay (ms) used by the `withLongLoadTime` variant to keep a query pending. */
@@ -88,28 +134,51 @@ function operationName(document: DocumentNode): string | undefined {
 export function mockOperation<TData, TVars>(
   operation: TypedDocumentNode<TData, TVars>,
   data: TData,
-  options: MockOperationOptions<TVars> = {},
-): MockedResponse<TData, TVars> {
-  return {
+  options?: MockOperationOptions<TVars, TData>,
+): MockedResponse<TData, TVars>;
+export function mockOperation<TData, TVars>(
+  operation: TypedDocumentNode<TData, TVars>,
+  data: (variables: TVars) => TData,
+  options?: MockOperationOptions<TVars, TData>,
+): DynamicMockedResponse<TData, TVars>;
+export function mockOperation<TData, TVars>(
+  operation: TypedDocumentNode<TData, TVars>,
+  data: MockOperationData<TData, TVars>,
+  options: MockOperationOptions<TVars, TData> = {},
+): AnyMockedResponse<TData, TVars> {
+  const envelope = {
     request: {
       query: operation,
       variables: options.variables ?? (matchAnyVariables as VariableMatcher<TVars>),
     },
-    result: { data },
     error: options.error,
     delay: options.delay,
     maxUsageCount: options.maxUsageCount ?? Number.POSITIVE_INFINITY,
   };
+  // Discriminate at runtime, not on the declared type: the static overload is listed first so a
+  // plain data object never selects the dynamic signature.
+  if (typeof data === 'function') {
+    const resolve = data as (variables: TVars) => TData;
+    return { ...envelope, result: (variables: TVars) => ({ data: resolve(variables) }) };
+  }
+  return { ...envelope, result: { data } };
 }
 
-export interface MockOperationVariants<TData, TVars> {
+export interface MockOperationVariants<TData, TVars, TResponse = MockedResponse<TData, TVars>> {
   /** Resolves immediately with `data`. */
-  withResults: MockedResponse<TData, TVars>;
+  withResults: TResponse;
   /** Stays pending (very long delay) — drive loading states. */
-  withLongLoadTime: MockedResponse<TData, TVars>;
+  withLongLoadTime: TResponse;
   /** Rejects with an error — drive error states. */
-  withError: MockedResponse<TData, TVars>;
+  withError: TResponse;
 }
+
+/** The trio in its resolver-function form, produced when `data` is a function. */
+export type DynamicMockOperationVariants<TData, TVars> = MockOperationVariants<
+  TData,
+  TVars,
+  DynamicMockedResponse<TData, TVars>
+>;
 
 /**
  * Build the common trio of mocks for one operation: a success, a perpetually-loading,
@@ -127,13 +196,31 @@ export interface MockOperationVariants<TData, TVars> {
 export function mockOperationVariants<TData, TVars>(
   operation: TypedDocumentNode<TData, TVars>,
   data: TData,
-  options: MockOperationOptions<TVars> = {},
-): MockOperationVariants<TData, TVars> {
+  options?: MockOperationOptions<TVars, TData>,
+): MockOperationVariants<TData, TVars>;
+export function mockOperationVariants<TData, TVars>(
+  operation: TypedDocumentNode<TData, TVars>,
+  data: (variables: TVars) => TData,
+  options?: MockOperationOptions<TVars, TData>,
+): DynamicMockOperationVariants<TData, TVars>;
+export function mockOperationVariants<TData, TVars>(
+  operation: TypedDocumentNode<TData, TVars>,
+  data: MockOperationData<TData, TVars>,
+  options: MockOperationOptions<TVars, TData> = {},
+): MockOperationVariants<TData, TVars, AnyMockedResponse<TData, TVars>> {
+  const build = (extra: MockOperationOptions<TVars, TData>) =>
+    (
+      mockOperation as (
+        operation: TypedDocumentNode<TData, TVars>,
+        data: MockOperationData<TData, TVars>,
+        options?: MockOperationOptions<TVars, TData>,
+      ) => AnyMockedResponse<TData, TVars>
+    )(operation, data, { ...options, ...extra });
+
   return {
-    withResults: mockOperation(operation, data, options),
-    withLongLoadTime: mockOperation(operation, data, { ...options, delay: LONG_LOAD_DELAY_MS }),
-    withError: mockOperation(operation, data, {
-      ...options,
+    withResults: build({}),
+    withLongLoadTime: build({ delay: LONG_LOAD_DELAY_MS }),
+    withError: build({
       error:
         options.error ??
         new Error(

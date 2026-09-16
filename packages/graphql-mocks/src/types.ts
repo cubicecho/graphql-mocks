@@ -1,7 +1,13 @@
 import type { Faker } from '@faker-js/faker';
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import type { DocumentNode } from 'graphql';
-import type { MockOperationOptions, MockOperationVariants, MockedResponse } from './apolloMocks.js';
+import type {
+  DynamicMockOperationVariants,
+  DynamicMockedResponse,
+  MockOperationOptions,
+  MockOperationVariants,
+  MockedResponse,
+} from './apolloMocks.js';
 import type { ArgMatchingOptions } from './argMatching.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
@@ -158,10 +164,16 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    * ```
    *
    * To supply the data yourself instead, use the standalone `mockOperation(operation, data)`.
+   * Pass `dynamic: true` to resolve per request from the incoming variables instead of once
+   * up front — `result` then becomes a function, which is why it is opt-in.
    */
   mockOperation<TData = unknown, TVars = Record<string, unknown>>(
     operation: TypedDocumentNode<TData, TVars>,
-    options?: MockOperationOptions<TVars>,
+    options: MockOperationOptions<TVars, TData> & { dynamic: true },
+  ): DynamicMockedResponse<TData, TVars>;
+  mockOperation<TData = unknown, TVars = Record<string, unknown>>(
+    operation: TypedDocumentNode<TData, TVars>,
+    options?: MockOperationOptions<TVars, TData>,
   ): MockedResponse<TData, TVars>;
   /**
    * Like {@link MockHelpers.mockOperation}, but returns the success / long-load / error trio at
@@ -169,7 +181,11 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    */
   mockOperationVariants<TData = unknown, TVars = Record<string, unknown>>(
     operation: TypedDocumentNode<TData, TVars>,
-    options?: MockOperationOptions<TVars>,
+    options: MockOperationOptions<TVars, TData> & { dynamic: true },
+  ): DynamicMockOperationVariants<TData, TVars>;
+  mockOperationVariants<TData = unknown, TVars = Record<string, unknown>>(
+    operation: TypedDocumentNode<TData, TVars>,
+    options?: MockOperationOptions<TVars, TData>,
   ): MockOperationVariants<TData, TVars>;
   /**
    * Build a resolver map keyed by type name, each returning a random pooled instance.

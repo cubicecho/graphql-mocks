@@ -25,6 +25,19 @@ import {
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult } from './types.js';
 
+// The public builders are overloaded on static vs. resolver-function data; the graph-bound
+// wrappers decide which applies at runtime, so they call through an unoverloaded view.
+const looseMockOperation = buildMockOperation as (
+  document: Parameters<typeof buildMockOperation>[0],
+  data: unknown,
+  options?: MockOperationOptions,
+) => unknown;
+const looseMockOperationVariants = buildMockOperationVariants as (
+  document: Parameters<typeof buildMockOperationVariants>[0],
+  data: unknown,
+  options?: MockOperationOptions,
+) => unknown;
+
 /** Pick a random element from an array; returns undefined if empty. */
 function pickRandom<T>(arr: T[], faker: Faker): T | undefined {
   return arr.length === 0 ? undefined : faker.helpers.arrayElement(arr);
@@ -63,6 +76,28 @@ function createMockResult(
       matchArguments,
     );
 
+  /**
+   * Data source for the graph-bound builders: a value resolved once by default, or a resolver
+   * called per request when `dynamic` is set, so real incoming variables reach the argument
+   * engine even when `request.variables` is a match-any predicate. `transform` applies to
+   * whichever path runs.
+   */
+  const operationData = (
+    document: Parameters<typeof buildMockOperation>[0],
+    opOptions: MockOperationOptions,
+  ): unknown => {
+    const transform = opOptions.transform as
+      | ((data: unknown, variables: Record<string, unknown>) => unknown)
+      | undefined;
+    const resolve = (variables: Record<string, unknown> | undefined) => {
+      const data = dataForOperation(document, variables, opOptions.matchArguments);
+      return transform ? transform(data, variables ?? {}) : data;
+    };
+    return opOptions.dynamic
+      ? (variables: Record<string, unknown>) => resolve(variables)
+      : resolve(variablesForData(opOptions.variables) as Record<string, unknown> | undefined);
+  };
+
   const helpers = {
     find<T = unknown>(typeName: string, predicate: (item: T) => boolean): T | undefined {
       const items = pool[typeName] as T[] | undefined;
@@ -73,21 +108,13 @@ function createMockResult(
       document: Parameters<typeof buildMockOperation>[0],
       opOptions: MockOperationOptions = {},
     ) {
-      const data = dataForOperation(
-        document,
-        variablesForData(opOptions.variables) as Record<string, unknown> | undefined,
-      );
-      return buildMockOperation(document, data, opOptions);
+      return looseMockOperation(document, operationData(document, opOptions), opOptions);
     },
     mockOperationVariants(
       document: Parameters<typeof buildMockOperationVariants>[0],
       opOptions: MockOperationOptions = {},
     ) {
-      const data = dataForOperation(
-        document,
-        variablesForData(opOptions.variables) as Record<string, unknown> | undefined,
-      );
-      return buildMockOperationVariants(document, data, opOptions);
+      return looseMockOperationVariants(document, operationData(document, opOptions), opOptions);
     },
     toResolvers(): Record<string, () => unknown> {
       const resolvers: Record<string, () => unknown> = {};

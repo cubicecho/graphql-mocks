@@ -310,3 +310,68 @@ describe('matchArguments', () => {
     expect(perCall.user.id).toBe('User-3');
   });
 });
+
+describe('mocks.mockOperation dynamic form', () => {
+  const graph = buildMocks(schema, { seed: 7, count: 8, stableIds: true });
+
+  it('resolves per request from the incoming variables', () => {
+    const mock = graph.mockOperation(UserByIdQuery, { dynamic: true, matchArguments: true });
+    expect(typeof mock.result).toBe('function');
+    const id = (graph.User as { id: string }[])[3]?.id as string;
+    expect(mock.result?.({ id }).data?.user?.id).toBe(id);
+  });
+
+  it('answers different variables from one mock', () => {
+    const mock = graph.mockOperation(UserByIdQuery, { dynamic: true, matchArguments: true });
+    const pool = graph.User as { id: string }[];
+    const first = pool[1]?.id as string;
+    const second = pool[5]?.id as string;
+    expect(mock.result?.({ id: first }).data?.user?.id).toBe(first);
+    expect(mock.result?.({ id: second }).data?.user?.id).toBe(second);
+  });
+
+  it('stays static by default so result.data keeps working', () => {
+    const mock = graph.mockOperation(UserByIdQuery);
+    expect(typeof mock.result).toBe('object');
+    expect(mock.result?.data?.user?.id).toBeDefined();
+  });
+
+  it('applies transform to the static form', () => {
+    const mock = graph.mockOperation(UserByIdQuery, {
+      transform: (data) => ({ user: { id: `patched-${data.user?.id}` } }),
+    });
+    expect(mock.result?.data?.user?.id).toMatch(/^patched-User-/);
+  });
+
+  it('applies transform to the dynamic form, with the incoming variables', () => {
+    const mock = graph.mockOperation(UserByIdQuery, {
+      dynamic: true,
+      transform: (_data, vars) => ({ user: { id: vars.id } }),
+    });
+    expect(mock.result?.({ id: 'from-vars' }).data?.user?.id).toBe('from-vars');
+  });
+
+  it('honors a per-call matchArguments without enabling it graph-wide', () => {
+    const doc = parse('{ users(skip: 1, limit: 2) { id } }') as TypedDocumentNode<
+      { users: { id: string }[] },
+      Record<string, never>
+    >;
+    const pool = (graph.User as { id: string }[]).map((u) => u.id);
+    expect(graph.mockOperation(doc, { matchArguments: true }).result?.data?.users).toEqual(
+      pool.slice(1, 3).map((id) => ({ id })),
+    );
+    // Graph-wide matching is still off: the default call ignores the arguments.
+    expect(graph.mockOperation(doc).result?.data?.users?.length).not.toBe(2);
+  });
+
+  it('produces dynamic variants with the trio still intact', () => {
+    const variants = graph.mockOperationVariants(UserByIdQuery, {
+      dynamic: true,
+      matchArguments: true,
+    });
+    const id = (graph.User as { id: string }[])[2]?.id as string;
+    expect(variants.withResults.result?.({ id }).data?.user?.id).toBe(id);
+    expect(variants.withLongLoadTime.delay).toBe(1_000_000);
+    expect(variants.withError.error?.message).toContain('UserById');
+  });
+});
