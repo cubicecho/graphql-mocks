@@ -14,6 +14,10 @@ export { paginate, searchItems } from './collection.js';
 export type { PageArgs } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
+  ArgOverride,
+  ArgOverrideContext,
+  ArgOverrideData,
+  ArgOverrideMatch,
   BuildMocksOptions,
   CountConfig,
   FieldOverrideFn,

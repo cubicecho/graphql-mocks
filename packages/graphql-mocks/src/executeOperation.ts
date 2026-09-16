@@ -1,3 +1,4 @@
+import type { Faker } from '@faker-js/faker';
 import {
   type DocumentNode,
   type GraphQLField,
@@ -27,12 +28,17 @@ import {
   activeArgNames,
   applyArgPlan,
   buildArgPlan,
+  echoFromPlan,
+  partitionWindow,
   resolveArgMatching,
+  resolveListTarget,
 } from './argMatching.js';
+import { paginate } from './collection.js';
 import { qaFallbackText, qaListLength } from './qa.js';
 import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
+import type { ArgOverride, ArgOverrideContext } from './types.js';
 
 type Pool = Record<string, Record<string, unknown>[]>;
 
@@ -100,6 +106,190 @@ function planFor(
   if (!ctx.arg.enabled) return null;
   const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
   return buildArgPlan(fieldDefinition(info), named, isList, args, active, ctx.arg);
+}
+
+/** Structural equality, enough for comparing coerced argument values. */
+function sameArgValue(expected: unknown, actual: unknown): boolean {
+  if (expected === actual) return true;
+  if (typeof expected !== 'object' || typeof actual !== 'object') return false;
+  if (expected === null || actual === null) return false;
+  return JSON.stringify(expected) === JSON.stringify(actual);
+}
+
+/** Whether one override's `match` describes this field selection. */
+function overrideMatches(
+  override: ArgOverride,
+  parentTypeName: string,
+  fieldName: string,
+  args: Record<string, unknown>,
+): boolean {
+  const { match } = override;
+  if (match.field !== fieldName) return false;
+  if (match.type !== undefined && match.type !== parentTypeName) return false;
+  if (match.predicate) return match.predicate(args);
+  if (!match.args) return true;
+  return Object.entries(match.args).every(([name, value]) => sameArgValue(value, args[name]));
+}
+
+/**
+ * The first `argOverrides` entry that claims this field, resolved to its value. Wrapped in an
+ * object so an override can legitimately answer with `undefined` or `null`.
+ *
+ * This runs ahead of everything else and ignores `matchArguments` entirely: an override is an
+ * instruction about one field, not an inference from its arguments, and it leaves every other
+ * field of the operation resolving from the graph — which is the whole point of it existing
+ * next to the operation-level overrides a handler takes.
+ */
+function argOverrideFor(
+  ctx: ResolveContext,
+  info: GraphQLResolveInfo,
+  args: Record<string, unknown>,
+): { value: unknown } | undefined {
+  const overrides = ctx.resolved.argOverrides;
+  if (overrides.length === 0) return undefined;
+  const parentTypeName = info.parentType.name;
+  const found = overrides.find((entry) =>
+    overrideMatches(entry, parentTypeName, info.fieldName, args),
+  );
+  if (!found) return undefined;
+  if (typeof found.data !== 'function') return { value: found.data };
+
+  const { named, isList } = unwrapOutput(info.returnType);
+  const resolve = found.data as (context: ArgOverrideContext) => unknown;
+  return {
+    value: resolve({
+      typeName: parentTypeName,
+      fieldName: info.fieldName,
+      args,
+      pool: ctx.pool[named.name] ?? [],
+      isList,
+      faker: ctx.resolved.faker,
+    }),
+  };
+}
+
+/** Take a normally-sized draw off the front of an already-ordered list. */
+function sizedWindow<T>(
+  items: readonly T[],
+  bounds: { min: number; max: number },
+  faker: Faker,
+): T[] {
+  if (items.length === 0) return [];
+  const max = bounds.max === UNBOUNDED ? items.length : Math.min(bounds.max, items.length);
+  return items.slice(0, faker.number.int({ min: Math.min(bounds.min, max), max }));
+}
+
+/** A pooled instance, as opposed to a scalar or null the pool may also hold. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Whether a plan matched on a field of the type it was built for, rather than a free-text term. */
+function namesOwnField(plan: ArgPlan): boolean {
+  return plan.equality.length > 0 || plan.contains.some((match) => match.field !== null);
+}
+
+/**
+ * Rebuild a Relay edge list around matched nodes. The edges themselves carry cursors and a
+ * `__typename`, so they are taken from the edge type's own pool and have their `node` replaced —
+ * building `{ node }` from nothing would drop every other field the selection might ask for.
+ */
+function buildEdges(
+  ctx: ResolveContext,
+  edgeTypeName: string,
+  nodes: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const edges = ctx.pool[edgeTypeName] ?? [];
+  return nodes.map((node, index) => {
+    const template = edges.length > 0 ? edges[index % edges.length] : undefined;
+    return { ...(template ?? { __typename: edgeTypeName }), node };
+  });
+}
+
+/**
+ * Bring a Relay `pageInfo` in line with the page that was just produced. Only keys the pooled
+ * `pageInfo` already has are touched, so a partial or custom shape keeps whatever it had.
+ */
+function syncPageInfo(
+  wrapper: Record<string, unknown>,
+  edges: readonly Record<string, unknown>[],
+  skip: number,
+  total: number,
+): Record<string, unknown> | undefined {
+  const pageInfo = wrapper.pageInfo;
+  if (!isRecord(pageInfo)) return undefined;
+  const cursorOf = (edge: Record<string, unknown> | undefined) => edge?.cursor;
+  const updated: Record<string, unknown> = { ...pageInfo };
+  if ('hasPreviousPage' in pageInfo) updated.hasPreviousPage = skip > 0;
+  if ('hasNextPage' in pageInfo) updated.hasNextPage = skip + edges.length < total;
+  if ('startCursor' in pageInfo) updated.startCursor = cursorOf(edges[0]) ?? null;
+  if ('endCursor' in pageInfo) updated.endCursor = cursorOf(edges[edges.length - 1]) ?? null;
+  return updated;
+}
+
+/**
+ * Apply a field's arguments to the list *inside* the wrapper type it returns, and hand back a
+ * copy of a pooled wrapper with that list replaced. Undefined means "not a wrapper this can
+ * read", and the caller falls through to the ordinary draw.
+ *
+ * The replacement list is drawn from the entity's own pool rather than from whatever the wrapper
+ * happened to be wired with in phase 2 — the same switch a direct list field makes when it is
+ * paged, so `skip: 10` has more than a handful of rows to page through. The pooled wrapper is
+ * copied, never mutated: it is shared with every other operation resolved from this graph.
+ */
+function unwrapListArgs(
+  ctx: ResolveContext,
+  named: GraphQLNamedType,
+  args: Record<string, unknown>,
+  info: RootFieldInfo,
+  items: Record<string, unknown>[],
+  outerPlan: ArgPlan | null,
+): unknown {
+  if (!ctx.arg.enabled) return undefined;
+  // An argument that names a field on the returned type itself is about *that* object, not
+  // about a list hanging off it: `warehouse(id: "w-1")` asks for one warehouse even though
+  // `Warehouse.items` is the only object list on it. Only arguments that name nothing there —
+  // a free-text search, paging — can be about the rows one level down.
+  if (outerPlan && namesOwnField(outerPlan)) return undefined;
+  const target = resolveListTarget(named, ctx.arg);
+  if (!target) return undefined;
+
+  const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
+  // Matched as a list: `take`/`skip` only mean anything against one.
+  const plan = buildArgPlan(fieldDefinition(info), target.entityType, true, args, active, ctx.arg);
+  if (!plan) return undefined;
+
+  const wrapper = pickRelated(items, SINGULAR_BOUNDS, false, ctx.resolved.faker);
+  if (!isRecord(wrapper)) return undefined;
+
+  const entities = ctx.pool[target.entityType.name] ?? [];
+  const rotated = plan.partitionKey
+    ? partitionWindow(entities, plan.partitionKey, entities.length)
+    : entities;
+  // Paging is applied separately so the pre-paging count is available for `pageInfo`.
+  const { items: filtered, filterMissed } = applyArgPlan(rotated, { ...plan, hasPaging: false });
+  if (filterMissed && ctx.arg.onMissList === 'fallback') return undefined;
+  const skip = plan.hasPaging ? (plan.page.skip ?? 0) : 0;
+  // A partition selects nothing, it only says *which* rows — so the list stays the length the
+  // wrapper was wired with and only its window moves. Without this, an argument that nothing
+  // could interpret would swap a four-row panel for the entire pool.
+  const wired = wrapper[target.fieldName];
+  const windowed =
+    !plan.hasFilters && !plan.hasPaging && Array.isArray(wired)
+      ? filtered.slice(0, wired.length)
+      : filtered;
+  const paged = plan.hasPaging ? paginate(windowed, plan.page) : windowed;
+
+  if (target.edgeTypeName === undefined) {
+    return { ...wrapper, [target.fieldName]: paged };
+  }
+  const edges = buildEdges(ctx, target.edgeTypeName, paged);
+  const pageInfo = syncPageInfo(wrapper, edges, skip, windowed.length);
+  return {
+    ...wrapper,
+    [target.fieldName]: edges,
+    ...(pageInfo ? { pageInfo } : {}),
+  };
 }
 
 /**
@@ -202,16 +392,41 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
 
   const items = pool[named.name];
   if (items && items.length > 0) {
+    // A field returning a wrapper describes the collection inside it, not the container: its
+    // `take`/`search`/`id` are about the rows. So when the wrapper has a list this can read,
+    // the inner match wins over anything the arguments happened to say about the wrapper —
+    // a free-text `search` matches no string field on a `{ results, totalCount }` anyway, and
+    // would only empty it.
+    if (!isList && isObjectType(named)) {
+      const unwrapped = unwrapListArgs(ctx, named, args, info, items, plan);
+      if (unwrapped !== undefined) return unwrapped;
+    }
     if (plan) {
-      const { items: matched, filterMissed } = applyArgPlan(items, plan);
+      const source = plan.partitionKey
+        ? partitionWindow(items, plan.partitionKey, items.length)
+        : items;
+      const { items: matched, filterMissed } = applyArgPlan(source, plan);
       if (!filterMissed) {
+        // A partition on its own doesn't select rows, it only says *which* ones — so the draw
+        // is still sized the way an unfiltered one would be, just from a different offset.
+        if (isList && !plan.hasFilters && !plan.hasPaging) {
+          return sizedWindow(matched, bounds, faker);
+        }
         if (isList) return matched;
         // Equality on an id is unique, so the first match is the match; randomizing is noise.
         if (matched.length > 0) return matched[0];
       }
       if (isList && ctx.arg.onMissList === 'empty') return [];
       if (!isList && !isNonNullSingular && ctx.arg.onMissSingular === 'empty') return null;
-      // else: fall through to the plain pooled draw below
+      // A singular miss falls back to a random instance below. Stamp the values the caller
+      // actually stated back over a *copy* of it, so a mutation reads back what it was handed
+      // instead of somebody else's record. The pooled instance itself is never touched.
+      if (!isList) {
+        const echo = ctx.arg.echoOnMiss ? echoFromPlan(plan) : null;
+        const picked = pickRelated(items, bounds, isList, faker);
+        if (echo && isRecord(picked)) return { ...picked, ...echo };
+        return picked;
+      }
     }
     return pickRelated(items, bounds, isList, faker);
   }
@@ -244,7 +459,19 @@ function applyNestedArgs(
     (item): item is Record<string, unknown> => item != null && typeof item === 'object',
   );
   if (objects.length !== value.length) return value;
-  const { items, filterMissed } = applyArgPlan(objects, plan);
+  // A partition redraws from the type's pool rather than reordering what phase 2 wired, because
+  // reordering three aliases of one field still shows the same rows in three panels. The list
+  // keeps the length it was wired with, so only *which* rows changes.
+  const source = plan.partitionKey
+    ? partitionWindow(
+        (ctx.pool[named.name]?.length ?? 0) >= objects.length
+          ? (ctx.pool[named.name] ?? objects)
+          : objects,
+        plan.partitionKey,
+        objects.length,
+      )
+    : objects;
+  const { items, filterMissed } = applyArgPlan(source, plan);
   if (filterMissed && ctx.arg.onMissList === 'fallback') return value;
   return items;
 }
@@ -341,10 +568,13 @@ export function resolveOperationResult(
     rootValue: {},
     variableValues: values,
     // Root fields draw from the pool; nested fields read the wired references via the default.
-    fieldResolver: (source, args, context, info) =>
-      rootTypeNames.has(info.parentType.name)
+    fieldResolver: (source, args, context, info) => {
+      const override = argOverrideFor(ctx, info, args);
+      if (override) return override.value;
+      return rootTypeNames.has(info.parentType.name)
         ? pickFromPool(ctx, info, args)
-        : applyNestedArgs(ctx, defaultFieldResolver(source, args, context, info), args, info),
+        : applyNestedArgs(ctx, defaultFieldResolver(source, args, context, info), args, info);
+    },
     // Abstract types (interface/union) resolve via the __typename carried by every mock.
     typeResolver: (value) =>
       value && typeof value === 'object' && '__typename' in value

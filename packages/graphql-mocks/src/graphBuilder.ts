@@ -38,7 +38,7 @@ import {
 } from './requestHandler.js';
 import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
-import type { BuildMocksOptions, MockResult, RelationSpec } from './types.js';
+import type { BuildMocksOptions, FieldDeriveFn, MockResult, RelationSpec } from './types.js';
 
 /** A singular field draws exactly one object; the QA list profile does not apply to it. */
 const SINGULAR_BOUNDS = { min: 1, max: 1 };
@@ -372,6 +372,58 @@ function wireReciprocal(
   }
 }
 
+/**
+ * Run `derive` over every pooled instance. Last phase by design: an instance is only complete
+ * once relationships are wired, and a derived field is exactly the one that needs to read them.
+ * A typo'd type or field name is worth saying out loud — a derive that never fires looks the
+ * same as one whose value was overwritten.
+ */
+function applyDerive(
+  objectTypes: GraphQLObjectType[],
+  pool: Record<string, Record<string, unknown>[]>,
+  resolved: ResolvedOptions,
+): void {
+  const { derive, faker } = resolved;
+  if (!derive) return;
+
+  const known = new Set(objectTypes.map((objectType) => objectType.name));
+  for (const typeName of Object.keys(derive)) {
+    if (!known.has(typeName)) {
+      console.warn(`[graphql-mocks] derive: unknown type "${typeName}" — no pool to derive onto`);
+    }
+  }
+
+  for (const objectType of objectTypes) {
+    const fields = derive[objectType.name];
+    if (!fields) continue;
+
+    const schemaFields = objectType.getFields();
+    // Object.entries order is the order the config was written, so one derive can read
+    // another's result; hold the pairs once rather than re-walking per instance.
+    const entries: [string, FieldDeriveFn][] = [];
+    for (const [fieldName, fn] of Object.entries(fields)) {
+      if (typeof fn !== 'function') continue;
+      if (!(fieldName in schemaFields)) {
+        console.warn(
+          `[graphql-mocks] derive: "${objectType.name}.${fieldName}" is not a field on that type — the value will be in the pool but no query can select it`,
+        );
+      }
+      entries.push([fieldName, fn as FieldDeriveFn]);
+    }
+
+    for (const [index, instance] of (pool[objectType.name] ?? []).entries()) {
+      for (const [fieldName, fn] of entries) {
+        instance[fieldName] = fn(instance, {
+          index,
+          typeName: objectType.name,
+          fieldName,
+          faker,
+        });
+      }
+    }
+  }
+}
+
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = resolveOptions(options);
   validateRelations(schema, resolved.relations);
@@ -467,6 +519,10 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
 
   // Phase 4: a QA list profile resized the lists; bring their count scalars back in step.
   syncCountFields(objectTypes, pool, resolved);
+
+  // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
+  // names a count field wins over phase 4's inference — it was written, the other was guessed.
+  applyDerive(objectTypes, pool, resolved);
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }
