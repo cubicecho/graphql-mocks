@@ -242,6 +242,58 @@ export type QaProfileName =
   | 'extremeDates'
   | 'kitchenSink';
 
+/** What an {@link ArgOverride}'s `data` function is handed. */
+export interface ArgOverrideContext {
+  /** The type that declares the field — `Query`, or the parent type for a nested field. */
+  typeName: string;
+  /** The schema field name, never the alias it was selected under. */
+  fieldName: string;
+  /** The field's coerced argument values. */
+  args: Record<string, unknown>;
+  /** The pool for the field's return type, empty for a scalar or an unpooled type. */
+  pool: Record<string, unknown>[];
+  /** Whether the field returns a list, so one function can serve both shapes. */
+  isList: boolean;
+  faker: Faker;
+}
+
+/** Which field selection an {@link ArgOverride} answers. */
+export interface ArgOverrideMatch {
+  /** Restrict to one parent type. Any type when omitted. */
+  type?: string;
+  /** The schema field name, never the alias. */
+  field: string;
+  /**
+   * Argument values that must all be present and equal for the override to apply. Compared by
+   * value, so an input object matches structurally. Omitted (with no `predicate`) matches the
+   * field whatever its arguments are.
+   */
+  args?: Record<string, unknown>;
+  /** Full control over the argument test, in place of `args`. */
+  predicate?: (args: Record<string, unknown>) => boolean;
+}
+
+/**
+ * What an override answers with: a value, or a function of the field's context. Spelled out as
+ * a union of value shapes rather than `unknown` so a `data: ({ pool }) => …` arrow gets its
+ * context typed — `unknown | Fn` collapses to `unknown` and loses the signature.
+ */
+export type ArgOverrideData =
+  | ((ctx: ArgOverrideContext) => unknown)
+  | Record<string, unknown>
+  | readonly unknown[]
+  | string
+  | number
+  | boolean
+  | null;
+
+/** A field-level, argument-matched answer — see {@link BuildMocksOptions.argOverrides}. */
+export interface ArgOverride {
+  match: ArgOverrideMatch;
+  /** The value the field resolves to, or a function of the field's context. */
+  data: ArgOverrideData;
+}
+
 /** A preset name, an explicit per-dimension config, or `false` to disable QA mode. */
 export type QaOption = QaProfileName | QaConfig | false;
 
@@ -352,6 +404,27 @@ export interface BuildMocksOptions<
    * @default false
    */
   matchArguments?: boolean | ArgMatchingOptions;
+  /**
+   * Answer a field with specific data when its *arguments* say so, leaving the rest of the
+   * operation to resolve from the graph. First match wins.
+   *
+   * ```ts
+   * argOverrides: [
+   *   { match: { field: 'items', args: { where: 'LOW_STOCK' } }, data: lowStockRows },
+   *   { match: { type: 'Query', field: 'users' }, data: ({ pool }) => pool.slice(0, 2) },
+   * ];
+   * ```
+   *
+   * A dashboard selects one field several times under different aliases, differing only by an
+   * argument value the matcher can't interpret (`items(where: LOW_STOCK)`). Only the caller
+   * knows what `LOW_STOCK` implies, and pinning the whole operation with a handler override
+   * gives up graph resolution for every other field on the screen. This is the narrow lever:
+   * one field, chosen by its arguments.
+   *
+   * Independent of {@link matchArguments} — an override is an instruction, not an inference,
+   * so it applies whether or not argument matching is on.
+   */
+  argOverrides?: readonly ArgOverride[];
   /**
    * Add a `__typename` field (set to the type name) to every generated object.
    * Required by the Apollo cache, so it's on by default.

@@ -5,13 +5,13 @@
   "type": "module",
   "author": "Benjamin Van Treese <vantreeseba@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/vantreeseba/graphql-mocks#readme",
+  "homepage": "https://github.com/cubicecho/graphql-mocks#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vantreeseba/graphql-mocks.git"
+    "url": "git+https://github.com/cubicecho/graphql-mocks.git"
   },
   "bugs": {
-    "url": "https://github.com/vantreeseba/graphql-mocks/issues"
+    "url": "https://github.com/cubicecho/graphql-mocks/issues"
   },
   "workspaces": [
     "packages/*"
