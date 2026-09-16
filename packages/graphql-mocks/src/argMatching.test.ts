@@ -1,9 +1,25 @@
-import { type FieldNode, Kind, parse } from 'graphql';
+import {
+  type FieldNode,
+  type GraphQLField,
+  type GraphQLNamedType,
+  Kind,
+  buildSchema,
+  parse,
+} from 'graphql';
 import { describe, expect, it } from 'vitest';
-import { activeArgNames, applyArgPlan, buildArgPlan, resolveArgMatching } from './argMatching.js';
+import {
+  activeArgNames,
+  applyArgPlan,
+  buildArgPlan,
+  echoFromPlan,
+  resolveArgMatching,
+} from './argMatching.js';
 import { schema } from './test/schema.js';
 
 const config = resolveArgMatching(true);
+// Partitioning turns any leftover scalar argument into a plan of its own, so the tests that
+// assert "nothing was interpreted" opt out of it and the partition tests assert it directly.
+const noPartition = resolveArgMatching({ partition: false });
 const queryType = schema.getQueryType();
 if (!queryType) throw new Error('test schema has no Query type');
 const queryFields = queryType.getFields();
@@ -184,7 +200,7 @@ describe('buildArgPlan', () => {
   it('ignores paging arguments on a singular field', () => {
     const args = { limit: 2 };
     expect(
-      buildArgPlan(queryFields.user, userType, false, args, allActive(args), config),
+      buildArgPlan(queryFields.user, userType, false, args, allActive(args), noPartition),
     ).toBeNull();
   });
 
@@ -199,7 +215,7 @@ describe('buildArgPlan', () => {
   it('ignores an argument that names no field on the return type', () => {
     const args = { nonsense: 'x' };
     expect(
-      buildArgPlan(queryFields.users, userType, true, args, allActive(args), config),
+      buildArgPlan(queryFields.users, userType, true, args, allActive(args), noPartition),
     ).toBeNull();
   });
 
@@ -220,7 +236,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled equality dimension', () => {
     const args = { id: 'u-1' };
-    const noEquality = resolveArgMatching({ equality: false });
+    const noEquality = resolveArgMatching({ equality: false, partition: false });
     expect(
       buildArgPlan(queryFields.user, userType, false, args, allActive(args), noEquality),
     ).toBeNull();
@@ -228,7 +244,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled paging dimension', () => {
     const args = { skip: 1, limit: 2 };
-    const noPaging = resolveArgMatching({ paging: false });
+    const noPaging = resolveArgMatching({ paging: false, partition: false });
     expect(
       buildArgPlan(queryFields.users, userType, true, args, allActive(args), noPaging),
     ).toBeNull();
@@ -236,7 +252,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled search dimension', () => {
     const args = { search: 'x' };
-    const noSearch = resolveArgMatching({ search: false });
+    const noSearch = resolveArgMatching({ search: false, partition: false });
     expect(
       buildArgPlan(queryFields.users, userType, true, args, allActive(args), noSearch),
     ).toBeNull();
@@ -255,7 +271,14 @@ describe('buildArgPlan', () => {
     if (!booleanType) throw new Error('missing Boolean');
     const args = { id: 'x' };
     expect(
-      buildArgPlan(mutationFields.deleteTodo, booleanType, false, args, allActive(args), config),
+      buildArgPlan(
+        mutationFields.deleteTodo,
+        booleanType,
+        false,
+        args,
+        allActive(args),
+        noPartition,
+      ),
     ).toBeNull();
   });
 });
@@ -274,6 +297,7 @@ describe('applyArgPlan', () => {
       page: {},
       hasFilters: false,
       hasPaging: false,
+      partitionKey: '',
     };
   }
 
@@ -362,5 +386,220 @@ describe('applyArgPlan', () => {
     const source = items.slice();
     applyArgPlan(source, plan({ page: { limit: 1 }, hasPaging: true }));
     expect(source).toHaveLength(3);
+  });
+});
+
+/**
+ * A filter-input schema of the shape ORM-generated APIs emit, kept local so the shared test
+ * schema stays the plain hand-written one.
+ */
+const whereSchema = buildSchema(`
+  input IdFilter { equals: ID, in: [ID!], gte: ID }
+  input AccountWhere { id: IdFilter, name: String, owner: OwnerWhere }
+  input OwnerWhere { id: ID }
+  input AccountData { name: String, tier: Int }
+
+  type Account { id: ID!, name: String!, tier: Int! }
+
+  type Query {
+    account(where: AccountWhere): Account
+    accounts(where: AccountWhere, first: Int): [Account!]!
+  }
+  type Mutation { createAccount(data: AccountData!): Account! }
+`);
+
+const whereQuery = whereSchema.getQueryType()?.getFields() ?? {};
+const whereMutation = whereSchema.getMutationType()?.getFields() ?? {};
+function mustType(name: string): GraphQLNamedType {
+  const type = whereSchema.getType(name);
+  if (!type) throw new Error(`where schema is missing ${name}`);
+  return type;
+}
+const accountType = mustType('Account');
+
+/** Build a plan the way `pickFromPool` does: derive the active paths from the AST first. */
+function planFor(
+  query: string,
+  field: GraphQLField<unknown, unknown> | undefined,
+  args: Record<string, unknown>,
+  isList = false,
+  options: Parameters<typeof resolveArgMatching>[0] = true,
+) {
+  const nodes = fieldNodes(query);
+  const active = activeArgNames(nodes, args, new Set());
+  return buildArgPlan(field, accountType, isList, args, active, resolveArgMatching(options));
+}
+
+describe('activeArgNames with nested inputs', () => {
+  it('reports a path for every level of an authored input object', () => {
+    const nodes = fieldNodes(
+      'query Q($id: ID!) { account(where: { id: { equals: $id } }) { id } }',
+    );
+    const active = activeArgNames(nodes, { where: { id: { equals: 'a-1' } } }, new Set());
+    expect([...active].sort()).toEqual(['where', 'where.id', 'where.id.equals']);
+  });
+
+  it('drops a wrapper whose only content is a synthesized variable', () => {
+    // The object literal itself is written out, but nothing inside it was chosen by the caller,
+    // so filtering on it would null a result that used to be a random instance.
+    const nodes = fieldNodes(
+      'query Q($id: ID!) { account(where: { id: { equals: $id } }) { id } }',
+    );
+    const active = activeArgNames(nodes, { where: { id: { equals: 'made-up' } } }, new Set(['id']));
+    expect([...active]).toEqual([]);
+  });
+
+  it('keeps the authored half of a mixed input object', () => {
+    const nodes = fieldNodes(
+      'query Q($id: ID!) { account(where: { id: { equals: $id }, name: "acme" }) { id } }',
+    );
+    const args = { where: { id: { equals: 'made-up' }, name: 'acme' } };
+    const active = activeArgNames(nodes, args, new Set(['id']));
+    expect([...active].sort()).toEqual(['where', 'where.name']);
+  });
+
+  it('treats an empty input object as authored', () => {
+    const nodes = fieldNodes('{ accounts(where: {}) { id } }');
+    expect([...activeArgNames(nodes, { where: {} }, new Set())]).toEqual(['where']);
+  });
+});
+
+describe('buildArgPlan with nested inputs', () => {
+  it('flattens an input-object field onto the same-named field of the return type', () => {
+    const plan = planFor(
+      'query Q($id: ID!) { account(where: { id: $id }) { id } }',
+      whereQuery.account,
+      { where: { id: 'a-1' } },
+    );
+    expect(plan?.equality).toEqual([{ field: 'id', values: ['a-1'], coerce: true }]);
+  });
+
+  it('unwraps an `equals` operator object', () => {
+    const plan = planFor(
+      'query Q($id: ID!) { account(where: { id: { equals: $id } }) { id } }',
+      whereQuery.account,
+      { where: { id: { equals: 'a-1' } } },
+    );
+    expect(plan?.equality).toEqual([{ field: 'id', values: ['a-1'], coerce: true }]);
+  });
+
+  it('unwraps an `in` operator object into a set match', () => {
+    const plan = planFor(
+      '{ accounts(where: { id: { in: ["a-1", "a-2"] } }) { id } }',
+      whereQuery.accounts,
+      { where: { id: { in: ['a-1', 'a-2'] } } },
+      true,
+    );
+    expect(plan?.equality).toEqual([{ field: 'id', values: ['a-1', 'a-2'], coerce: true }]);
+  });
+
+  it('leaves a comparison operator it does not understand alone', () => {
+    const plan = planFor('{ account(where: { id: { gte: "a-1" } }) { id } }', whereQuery.account, {
+      where: { id: { gte: 'a-1' } },
+    });
+    expect(plan).toBeNull();
+  });
+
+  it('flattens a mutation input so the result echoes what it was handed', () => {
+    const plan = planFor(
+      '{ createAccount(data: { name: "Acme", tier: 2 }) { id } }',
+      whereMutation.createAccount,
+      { data: { name: 'Acme', tier: 2 } },
+    );
+    expect(plan?.equality).toEqual([
+      { field: 'name', values: ['Acme'], coerce: false },
+      { field: 'tier', values: [2], coerce: false },
+    ]);
+  });
+
+  it('stops at the depth limit, so a nested wrapper does not reach through', () => {
+    const plan = planFor(
+      '{ account(where: { owner: { id: "u-1" } }) { id } }',
+      whereQuery.account,
+      { where: { owner: { id: 'u-1' } } },
+    );
+    // `owner.id` is two levels down and names the *owner's* id, not the account's.
+    expect(plan).toBeNull();
+  });
+
+  it('reaches a second level when flattenDepth allows it', () => {
+    const plan = planFor(
+      '{ account(where: { owner: { id: "u-1" } }) { id } }',
+      whereQuery.account,
+      { where: { owner: { id: 'u-1' } } },
+      false,
+      { flattenDepth: 2 },
+    );
+    expect(plan?.equality).toEqual([{ field: 'id', values: ['u-1'], coerce: true }]);
+  });
+
+  it('does not descend at all with flattenInputs false', () => {
+    const plan = planFor(
+      'query Q($id: ID!) { account(where: { id: $id }) { id } }',
+      whereQuery.account,
+      { where: { id: 'a-1' } },
+      false,
+      { flattenInputs: false },
+    );
+    expect(plan).toBeNull();
+  });
+
+  it('ignores a nested name listed in ignoreArgs', () => {
+    const plan = planFor(
+      '{ createAccount(data: { name: "Acme", tier: 2 }) { id } }',
+      whereMutation.createAccount,
+      { data: { name: 'Acme', tier: 2 } },
+      false,
+      { ignoreArgs: ['tier'] },
+    );
+    expect(plan?.equality).toEqual([{ field: 'name', values: ['Acme'], coerce: false }]);
+  });
+
+  it('ignores the whole wrapper when the outer name is listed', () => {
+    const plan = planFor(
+      'query Q($id: ID!) { account(where: { id: $id }) { id } }',
+      whereQuery.account,
+      { where: { id: 'a-1' } },
+      false,
+      { ignoreArgs: ['where'] },
+    );
+    expect(plan).toBeNull();
+  });
+
+  it('reads paging out of a flattened input', () => {
+    const plan = planFor(
+      '{ accounts(where: { name: "acme" }, first: 2) { id } }',
+      whereQuery.accounts,
+      { where: { name: 'acme' }, first: 2 },
+      true,
+    );
+    expect(plan?.page).toEqual({ limit: 2 });
+    expect(plan?.equality).toEqual([{ field: 'name', values: ['acme'], coerce: false }]);
+  });
+});
+
+describe('echoFromPlan', () => {
+  it('turns single-valued equality matches into a patch', () => {
+    const plan = planFor(
+      '{ createAccount(data: { name: "Acme", tier: 2 }) { id } }',
+      whereMutation.createAccount,
+      { data: { name: 'Acme', tier: 2 } },
+    );
+    expect(plan && echoFromPlan(plan)).toEqual({ name: 'Acme', tier: 2 });
+  });
+
+  it('skips a set match, which names no single value to echo', () => {
+    const plan = planFor(
+      '{ accounts(where: { id: { in: ["a-1", "a-2"] } }) { id } }',
+      whereQuery.accounts,
+      { where: { id: { in: ['a-1', 'a-2'] } } },
+      true,
+    );
+    expect(plan && echoFromPlan(plan)).toBeNull();
+  });
+
+  it('is null for a plan that only pages', () => {
+    const plan = planFor('{ accounts(first: 2) { id } }', whereQuery.accounts, { first: 2 }, true);
+    expect(plan && echoFromPlan(plan)).toBeNull();
   });
 });

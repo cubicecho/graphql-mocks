@@ -68,6 +68,47 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/** Where a derive is firing, plus the tools the function may need. */
+export interface DeriveContext {
+  /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
+  index: number;
+  typeName: string;
+  fieldName: string;
+  /** The same seeded faker the generator drew with, so a derive stays deterministic. */
+  faker: Faker;
+}
+
+/**
+ * Compute a field from the object that owns it. Unlike {@link FieldOverrideFn}, which fires
+ * while the instance is still being built, a derive runs once the instance is complete and
+ * every relationship is wired — so `self` carries the type's scalars, its relationship fields,
+ * and any reciprocal back-references:
+ *
+ * ```ts
+ * derive: { User: { fullName: (self) => `${self.firstName} ${self.lastName}` } }
+ * ```
+ *
+ * @typeParam TSelf - The owning object's type. @typeParam T - The field's value type.
+ */
+export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = (
+  self: TSelf,
+  ctx: DeriveContext,
+) => T;
+
+// Derives for a single type, degrading to a loose record when the shape is unknown, the same
+// way `FieldOverrides` does.
+type FieldDerives<T> = unknown extends T
+  ? Record<string, FieldDeriveFn>
+  : { [F in keyof T]?: FieldDeriveFn<T, T[F]> };
+
+/**
+ * Per-type, per-field derive map. With a `TTypes` map, type and field names autocomplete,
+ * `self` is the owning type, and each derive's return type is bound to the field's type.
+ */
+export type DeriveConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: FieldDerives<TTypes[K]>;
+};
+
 /**
  * How many related objects a relationship field gets. A number is an exact size, a
  * `{ min, max }` range picks a random size in between, `'all'` takes the whole target pool,
@@ -184,6 +225,27 @@ export interface QaConfig {
    * @default 100
    */
   listSize?: number;
+  /**
+   * With a `lists` profile active, rewrite companion count scalars to the length of the list
+   * they count, so an emptied list no longer reports a total of 315. A count is paired by name
+   * — `totalCount`/`total`/`resultCount` and friends on a type with one list field, or
+   * `postCount`/`numberOfPosts`/`totalPosts` naming the list directly — and a field with an
+   * explicit `overrides` entry is left alone. Set `false` for a schema where the convention
+   * doesn't hold.
+   * @default true
+   */
+  syncCounts?: boolean;
+  /**
+   * Pair a count field with its list explicitly, for the schemas the convention misses:
+   *
+   * ```ts
+   * qa: { lists: 'empty', countFields: { ProductSearchResult: { hitTotal: 'results' } } }
+   * ```
+   *
+   * Keyed by type name, then by count field name, with the list field name as the value.
+   * Applied verbatim, ahead of any name matching.
+   */
+  countFields?: Record<string, Record<string, string>>;
 }
 
 /**
@@ -206,6 +268,58 @@ export type QaProfileName =
   | 'boundaryNumbers'
   | 'extremeDates'
   | 'kitchenSink';
+
+/** What an {@link ArgOverride}'s `data` function is handed. */
+export interface ArgOverrideContext {
+  /** The type that declares the field — `Query`, or the parent type for a nested field. */
+  typeName: string;
+  /** The schema field name, never the alias it was selected under. */
+  fieldName: string;
+  /** The field's coerced argument values. */
+  args: Record<string, unknown>;
+  /** The pool for the field's return type, empty for a scalar or an unpooled type. */
+  pool: Record<string, unknown>[];
+  /** Whether the field returns a list, so one function can serve both shapes. */
+  isList: boolean;
+  faker: Faker;
+}
+
+/** Which field selection an {@link ArgOverride} answers. */
+export interface ArgOverrideMatch {
+  /** Restrict to one parent type. Any type when omitted. */
+  type?: string;
+  /** The schema field name, never the alias. */
+  field: string;
+  /**
+   * Argument values that must all be present and equal for the override to apply. Compared by
+   * value, so an input object matches structurally. Omitted (with no `predicate`) matches the
+   * field whatever its arguments are.
+   */
+  args?: Record<string, unknown>;
+  /** Full control over the argument test, in place of `args`. */
+  predicate?: (args: Record<string, unknown>) => boolean;
+}
+
+/**
+ * What an override answers with: a value, or a function of the field's context. Spelled out as
+ * a union of value shapes rather than `unknown` so a `data: ({ pool }) => …` arrow gets its
+ * context typed — `unknown | Fn` collapses to `unknown` and loses the signature.
+ */
+export type ArgOverrideData =
+  | ((ctx: ArgOverrideContext) => unknown)
+  | Record<string, unknown>
+  | readonly unknown[]
+  | string
+  | number
+  | boolean
+  | null;
+
+/** A field-level, argument-matched answer — see {@link BuildMocksOptions.argOverrides}. */
+export interface ArgOverride {
+  match: ArgOverrideMatch;
+  /** The value the field resolves to, or a function of the field's context. */
+  data: ArgOverrideData;
+}
 
 /** A preset name, an explicit per-dimension config, or `false` to disable QA mode. */
 export type QaOption = QaProfileName | QaConfig | false;
@@ -260,6 +374,29 @@ export interface BuildMocksOptions<
    */
   relations?: RelationsConfig<TTypes>;
   /**
+   * Per-type, per-field functions that compute a field **from the finished object**. They run
+   * last — after scalars, after `overrides`, after relationships are wired and mirrored — so
+   * every sibling and every related object is already there to read:
+   *
+   * ```ts
+   * buildMocks(schema, {
+   *   derive: {
+   *     User: { fullName: (self) => `${self.firstName} ${self.lastName}` },
+   *     ProductSearchResult: { totalCount: (self) => self.results.length },
+   *   },
+   * });
+   * ```
+   *
+   * This is the lever for any field that must agree with its siblings — a total over a list,
+   * a name assembled from its parts, a balance that is a difference of two others. `overrides`
+   * structurally cannot do it: it fires per field while the instance is half-built, so a derive
+   * always wins over an `overrides` entry for the same field. Within one type, derives run in
+   * the order they are written, so one may read another's result.
+   *
+   * Applies to pooled instances, which is what every operation draws from.
+   */
+  derive?: DeriveConfig<TTypes>;
+  /**
    * One or more {@link Scenario} layers to build on. Applied left to right, with these
    * options merged last — so an explicit `count` here always wins over a scenario's.
    *
@@ -267,7 +404,7 @@ export interface BuildMocksOptions<
    * buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], seed: 42 });
    * ```
    *
-   * Maps merge key by key (`count`, `overrides`, `relations`, `scalars`, and the QA
+   * Maps merge key by key (`count`, `overrides`, `derive`, `relations`, `scalars`, and the QA
    * dimensions); everything else is last-one-wins.
    */
   scenario?: Scenario<TTypes> | Scenario<TTypes>[];
@@ -294,6 +431,27 @@ export interface BuildMocksOptions<
    * @default false
    */
   matchArguments?: boolean | ArgMatchingOptions;
+  /**
+   * Answer a field with specific data when its *arguments* say so, leaving the rest of the
+   * operation to resolve from the graph. First match wins.
+   *
+   * ```ts
+   * argOverrides: [
+   *   { match: { field: 'items', args: { where: 'LOW_STOCK' } }, data: lowStockRows },
+   *   { match: { type: 'Query', field: 'users' }, data: ({ pool }) => pool.slice(0, 2) },
+   * ];
+   * ```
+   *
+   * A dashboard selects one field several times under different aliases, differing only by an
+   * argument value the matcher can't interpret (`items(where: LOW_STOCK)`). Only the caller
+   * knows what `LOW_STOCK` implies, and pinning the whole operation with a handler override
+   * gives up graph resolution for every other field on the screen. This is the narrow lever:
+   * one field, chosen by its arguments.
+   *
+   * Independent of {@link matchArguments} — an override is an instruction, not an inference,
+   * so it applies whether or not argument matching is on.
+   */
+  argOverrides?: readonly ArgOverride[];
   /**
    * Add a `__typename` field (set to the type name) to every generated object.
    * Required by the Apollo cache, so it's on by default.

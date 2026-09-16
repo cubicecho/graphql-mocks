@@ -1,6 +1,7 @@
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { type DocumentNode, Kind } from 'graphql';
 import type { ArgMatchingOptions } from './argMatching.js';
+import { warnOnEnvelopeData } from './validateMocks.js';
 
 /**
  * Reduce `options.variables` to concrete variables for pool-based data resolution: a matcher
@@ -146,6 +147,7 @@ export function mockOperation<TData, TVars>(
   data: MockOperationData<TData, TVars>,
   options: MockOperationOptions<TVars, TData> = {},
 ): AnyMockedResponse<TData, TVars> {
+  warnOnEnvelopeData(data, 'mockOperation', operationName(operation));
   const envelope = {
     request: {
       query: operation,
