@@ -26,7 +26,7 @@ Each package's API contract and options are documented in its own README:
 - **Tests:** Vitest + `@vitest/coverage-v8` (`npm test`, `npm run coverage`)
 - **Formatting/linting:** Biome at the repo root (`npm run check`)
 - **Build:** `tsc` per package (`npm run build`) — each outputs to its own `dist/`
-- **Runtime peer deps:** `graphql >=16`, `@faker-js/faker >=9`; optional `graphql-scalars ^1.23` (scalar names recognized by convention; not imported at runtime)
+- **Runtime peer deps:** `graphql >=16`, `@faker-js/faker >=9`; optional `graphql-scalars ^1.23` (scalar names recognized by convention; not imported at runtime) and `@apollo/client >=3.8 <5` (only for the `./apollo` subpath — the root entry never imports it)
 - **Codegen peer deps:** `graphql >=16`, `@graphql-codegen/plugin-helpers >=5`, `@graphql-codegen/visitor-plugin-common >=5`
 - **No lodash** — inline any string utilities needed
 
@@ -41,7 +41,14 @@ packages/
       scalarMockers.ts        — default scalar → faker mapping
       typeMocker.ts           — per-type field mock generator
       graphBuilder.ts         — assembles cross-type relationships into a graph
+      executeOperation.ts     — resolves a document against the graph
+      argMatching.ts          — opt-in interpretation of field arguments
+      collection.ts           — paginate/searchItems array primitives
       apolloMocks.ts          — Apollo MockedProvider mock builders (mockOperation)
+      requestHandler.ts       — graph-backed handler answering any operation
+      scenarios.ts            — default/loading/errored handler options
+      operationsFrom.ts       — variants keyed by a document module's exports
+      apollo/index.ts         — ./apollo subpath: mockLink (optional @apollo/client peer)
       helpers.ts              — utility functions
       types.ts                — all public TypeScript types
       test/schema.ts          — test GraphQL schema (rich, with custom scalars)

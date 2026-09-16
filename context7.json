@@ -1,23 +1,29 @@
 {
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "@vantreeseba/graphql-mocks",
-  "description": "Generate realistic, graph-connected mock data from a GraphQL schema using faker, plus a GraphQL Code Generator plugin that emits a SchemaTypeMap for typed mock pools.",
+  "description": "Generate realistic, graph-connected mock data from a GraphQL schema using faker, with a graph-backed request handler and Apollo link for answering any operation, plus a GraphQL Code Generator plugin that emits a SchemaTypeMap for typed mock pools.",
   "folders": ["packages/graphql-mocks", "packages/graphql-mocks-codegen"],
   "excludeFolders": ["node_modules", "dist", "coverage", ".github"],
   "excludeFiles": ["package-lock.json", "CHANGELOG.md"],
   "rules": [
     "buildMocks(schema, options?) is the runtime entry point; it accepts a GraphQLSchema or an SDL string and returns a MockResult keyed by object-type name.",
-    "Relationships are wired as actual object references: todo.user is the same object as mocks.User[i], not a copy. Circular references resolve to already-generated objects.",
+    "Relationships are wired as actual object references: todo.user is the same object as mocks.User[i], not a copy. Circular references resolve to already-generated objects, so a pool is not JSON-serializable.",
     "Pools are unknown[] by default. Pass a TTypes map (buildMocks<{ User: User }>(schema)) or a generated SchemaTypeMap to get typed pools without a cast.",
     "Use the @vantreeseba/graphql-mocks-codegen plugin to auto-generate the SchemaTypeMap from a schema; run it alongside the standard typescript plugin in codegen.ts.",
     "Determinism comes from the seed option; override and scalar functions receive the generator's seeded faker instance, so do not import a separate faker for them.",
-    "Default counts are 5 per type; scalar list fields generate 1-3 items and relationship list fields 1-5. Unknown scalars fall back to faker.lorem.word() with a console.warn.",
+    "Default counts are 5 per type; scalar list fields generate 1-3 items and relationship list fields use listSize (default 1-5). Unknown scalars fall back to faker.lorem.word() with a console.warn.",
     "Every object gets __typename by default (Apollo cache needs it); disable with addTypename: false. stableIds gives id fields readable TypeName-<index> values, but an explicit overrides entry for id still wins.",
-    "mocks.dataForOperation(document, variables?) executes a query/mutation against the graph, returning data shaped to the selection set: root fields picked from pools by return type, nested fields follow wired refs, abstract fields resolve via __typename.",
-    "dataForOperation ignores variables when picking mocks; required variables are auto-filled so execution runs. With a TypedDocumentNode the return type is inferred.",
-    "Apollo MockedProvider helpers build MockedResponse entries: mockOperation/mockOperationVariants take supplied data; mockOperationFromPool/mockOperationVariantsFromPool resolve data from a MockResult graph so the query's selection set picks the mocks.",
-    "Apollo helpers default to matching any variables with maxUsageCount Infinity (override via options.variables/delay/error/maxUsageCount). No runtime @apollo/client dep; @graphql-typed-document-node/core is an optional peer for the TypedDocumentNode type.",
-    "ESM-only, TypeScript 5 strict. Runtime peer deps: graphql >=16, @faker-js/faker >=9 (optional @graphql-typed-document-node/core >=3 for Apollo helpers); codegen plugin also needs @graphql-codegen/plugin-helpers and visitor-plugin-common."
+    "mocks.dataForOperation(document, variables?, matchArguments?) executes a query/mutation against the graph, returning data shaped to the selection set: root fields picked from pools by return type, nested fields follow wired refs, abstract fields resolve via __typename.",
+    "matchArguments is opt-in (default false) on buildMocks, a handler, or per call. It interprets only three buckets \u2014 equality against a same-named scalar/enum field, search args (search/query/q/filter/searchTerm/term or <field>Contains), and paging (skip/offset plus limit/first/take) \u2014 and ignores everything else. There is no fuzzy matching.",
+    "Arguments bound to variables the library auto-filled are ignored, so mockOperation(SomeByIdQuery) with no variables still returns a random pooled item. On a miss, lists return [], nullable singulars fall back to a random pick, and non-null singulars always fall back regardless of onMiss.",
+    "mocks.toRequestHandler(options?) answers any operation from the graph with no registration; results memoize per document+variables by default, overrides (matched by name, document identity, or predicate) force data/errors/networkError/loading/delay/once states, handler.calls records operations, and reset() clears memo, calls and consumed overrides. Mutations never mutate the pool.",
+    "mockLink(mocksOrHandler, options?) from @vantreeseba/graphql-mocks/apollo turns a graph or handler into an ApolloLink. @apollo/client is an optional peer (>=3.8 <5); the root entry has no Apollo dependency at all.",
+    "Apollo MockedProvider helpers build MockedResponse entries: the standalone mockOperation/mockOperationVariants take supplied data, while mocks.mockOperation/mocks.mockOperationVariants resolve data from the graph so the query's selection set picks the mocks.",
+    "mockOperation and mockOperationVariants also accept a resolver function of the variables, producing a DynamicMockedResponse with result as a function; the static overload is unchanged so result.data reads keep their types. The graph-bound forms take dynamic, transform and matchArguments options.",
+    "mockScenarios(base?, target?) returns default/loading/errored MockHandlerOptions; mocks.mockOperationsFrom(module) maps a codegen document module's export names to lazily built variants; paginate/searchItems are exported for wrapper types the argument engine cannot reach.",
+    "mocks.ids(type), mocks.at(type, index) and mocks.byId(type, id) address pooled items directly; ids() types as string[] without a TTypes map.",
+    "Apollo helpers default to matching any variables with maxUsageCount Infinity (override via options.variables/delay/error/maxUsageCount). @graphql-typed-document-node/core is an optional peer for the TypedDocumentNode type.",
+    "ESM-only, TypeScript 5 strict. Runtime peer deps: graphql >=16, @faker-js/faker >=9 (optional @graphql-typed-document-node/core >=3 and @apollo/client >=3.8 <5); codegen plugin also needs @graphql-codegen/plugin-helpers and visitor-plugin-common."
   ],
   "previousVersions": []
 }

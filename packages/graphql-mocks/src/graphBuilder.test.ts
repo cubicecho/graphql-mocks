@@ -347,7 +347,7 @@ describe('pool accessors', () => {
     const noIds = buildGraph(schema, { seed: 21, count: 3 });
     // Comment has an id; a type without one contributes nothing.
     for (const item of noIds.Comment as Record<string, unknown>[]) {
-      delete item.id;
+      item.id = undefined;
     }
     expect(noIds.ids('Comment')).toEqual([]);
   });
