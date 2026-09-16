@@ -138,6 +138,30 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
   ): TTypes[K] | undefined;
   find<T = unknown>(typeName: string, predicate: (item: T) => boolean): T | undefined;
   /**
+   * The pooled item of `typeName` at `index`, in generation order — the same order `stableIds`
+   * numbers them in. Returns undefined when the index is out of range.
+   */
+  at<K extends keyof TTypes & string>(typeName: K, index: number): TTypes[K] | undefined;
+  at<T = unknown>(typeName: string, index: number): T | undefined;
+  /**
+   * The pooled item of `typeName` with this id. Ids are compared as strings, so a numeric id
+   * from a variable matches a string id in the pool.
+   */
+  byId<K extends keyof TTypes & string>(typeName: K, id: string | number): TTypes[K] | undefined;
+  byId<T = unknown>(typeName: string, id: string | number): T | undefined;
+  /**
+   * The ids of every pooled item of `typeName`, in generation order; items without an id are
+   * skipped. Unlike `at(...)?.id`, this needs no `TTypes` map to come back typed:
+   *
+   * ```ts
+   * const id = mocks.ids('User')[0] as string;
+   * mocks.mockOperation(UserByIdQuery, { variables: { id }, matchArguments: true });
+   * ```
+   *
+   * Pair it with `stableIds` for readable, stable values.
+   */
+  ids(typeName: string): string[];
+  /**
    * Resolve a query or mutation against the mock graph and return its data shaped to the
    * selection set — no need to assemble the result by hand. Root fields are drawn from the
    * pools by their return type; nested fields follow the already-wired object references.

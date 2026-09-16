@@ -310,3 +310,45 @@ describe('listSize', () => {
     );
   });
 });
+
+describe('pool accessors', () => {
+  const mocks = buildGraph(schema, { seed: 21, count: 4, stableIds: true });
+
+  it('addresses items by index in generation order', () => {
+    expect((mocks.at<{ id: string }>('User', 0) as { id: string }).id).toBe('User-0');
+    expect((mocks.at<{ id: string }>('User', 3) as { id: string }).id).toBe('User-3');
+    expect(mocks.at('User', 99)).toBeUndefined();
+    expect(mocks.at('Nope', 0)).toBeUndefined();
+  });
+
+  it('returns the same object the pool holds', () => {
+    expect(mocks.at('User', 1)).toBe((mocks.User as unknown[])[1]);
+  });
+
+  it('finds items by id, comparing as strings', () => {
+    const numeric = buildGraph(schema, {
+      seed: 21,
+      count: 3,
+      overrides: { User: { id: () => 7 } },
+    });
+    expect(numeric.byId<{ id: number }>('User', '7')?.id).toBe(7);
+    expect(numeric.byId<{ id: number }>('User', 7)?.id).toBe(7);
+    expect(mocks.byId<{ id: string }>('User', 'User-2')?.id).toBe('User-2');
+    expect(mocks.byId('User', 'missing')).toBeUndefined();
+    expect(mocks.byId('Nope', '1')).toBeUndefined();
+  });
+
+  it('lists ids in generation order', () => {
+    expect(mocks.ids('User')).toEqual(['User-0', 'User-1', 'User-2', 'User-3']);
+    expect(mocks.ids('Nope')).toEqual([]);
+  });
+
+  it('skips items with no id rather than emitting undefined entries', () => {
+    const noIds = buildGraph(schema, { seed: 21, count: 3 });
+    // Comment has an id; a type without one contributes nothing.
+    for (const item of noIds.Comment as Record<string, unknown>[]) {
+      delete item.id;
+    }
+    expect(noIds.ids('Comment')).toEqual([]);
+  });
+});

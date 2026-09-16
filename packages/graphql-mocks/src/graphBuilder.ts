@@ -108,6 +108,24 @@ function createMockResult(
       const items = pool[typeName] as T[] | undefined;
       return items?.find(predicate);
     },
+    at<T = unknown>(typeName: string, index: number): T | undefined {
+      return (pool[typeName] as T[] | undefined)?.[index];
+    },
+    byId<T = unknown>(typeName: string, id: string | number): T | undefined {
+      const wanted = String(id);
+      return (pool[typeName] as { id?: unknown }[] | undefined)?.find(
+        (item) => item != null && String(item.id) === wanted,
+      ) as T | undefined;
+    },
+    ids(typeName: string): string[] {
+      const items = pool[typeName] as { id?: unknown }[] | undefined;
+      if (!items) return [];
+      const result: string[] = [];
+      for (const item of items) {
+        if (item != null && item.id != null) result.push(String(item.id));
+      }
+      return result;
+    },
     dataForOperation,
     mockOperation(
       document: Parameters<typeof buildMockOperation>[0],
