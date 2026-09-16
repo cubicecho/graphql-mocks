@@ -35,3 +35,5 @@ export type {
   MockRequest,
   MockRequestHandler,
 } from './requestHandler.js';
+export { mockScenarios } from './scenarios.js';
+export type { MockScenarios, ScenarioTarget } from './scenarios.js';
