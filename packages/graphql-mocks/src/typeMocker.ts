@@ -1,4 +1,3 @@
-import type { Faker } from '@faker-js/faker';
 import {
   type GraphQLNamedType,
   type GraphQLObjectType,
@@ -8,16 +7,9 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
-import {
-  type ResolvedQa,
-  qaFallbackText,
-  qaListLength,
-  qaNullChance,
-  qaScalarMockers,
-  resolveQa,
-} from './qa.js';
+import { qaFallbackText, qaListLength } from './qa.js';
+import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
-import type { BuildMocksOptions, ScalarMocker } from './types.js';
 
 export interface UnwrappedType {
   namedType: GraphQLNamedType;
@@ -58,17 +50,12 @@ export function unwrapType(type: GraphQLType): UnwrappedType {
  */
 export function mockTypeScalars(
   typeDef: GraphQLObjectType,
-  faker: Faker,
-  options: BuildMocksOptions,
-  // Precomputed by the caller so the QA config and its scalar map are built once per build
-  // rather than once per instance. Omitted (and derived here) when called directly.
-  qaContext: QaContext = qaContextFor(options),
+  resolved: ResolvedOptions,
 ): Record<string, unknown> {
   const fields = typeDef.getFields();
   const result: Record<string, unknown> = {};
-  const typeOverrides = options.overrides?.[typeDef.name] ?? {};
-  const { qa, qaScalars } = qaContext;
-  const nullChance = qaNullChance(qa) ?? options.nullChance ?? 0;
+  const { faker, qa, qaScalars, nullChance } = resolved;
+  const typeOverrides = resolved.overrides[typeDef.name] ?? {};
   const listLength = qaListLength(qa, { min: 1, max: 3 });
 
   for (const [fieldName, field] of Object.entries(fields)) {
@@ -102,7 +89,7 @@ export function mockTypeScalars(
       continue;
     }
 
-    const mocker = resolveScalarMocker(namedType.name, options.scalars, qaScalars);
+    const mocker = resolveScalarMocker(namedType.name, resolved.scalars, qaScalars);
     if (!mocker) {
       console.warn(
         `[graphql-mocks] Unknown scalar "${namedType.name}" on ${typeDef.name}.${fieldName} — falling back to faker.lorem.word()`,
@@ -122,15 +109,4 @@ export function mockTypeScalars(
   }
 
   return result;
-}
-
-/** QA config plus its derived scalar map, built once per `buildGraph` call. */
-export interface QaContext {
-  qa: ResolvedQa | undefined;
-  qaScalars: Record<string, ScalarMocker> | undefined;
-}
-
-export function qaContextFor(options: BuildMocksOptions): QaContext {
-  const qa = resolveQa(options.qa);
-  return { qa, qaScalars: qa ? qaScalarMockers(qa) : undefined };
 }

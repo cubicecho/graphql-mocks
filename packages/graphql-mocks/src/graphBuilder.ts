@@ -15,9 +15,10 @@ import {
   variablesForData,
 } from './apolloMocks.js';
 import { resolveOperationData } from './executeOperation.js';
-import { OPERATION_TYPE_NAMES, resolveCount, resolveFaker } from './helpers.js';
-import { type ResolvedQa, qaDefaultCount, qaListLength, qaNullChance } from './qa.js';
-import { mockTypeScalars, qaContextFor, unwrapType } from './typeMocker.js';
+import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
+import { type ResolvedQa, qaListLength } from './qa.js';
+import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
+import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult } from './types.js';
 
 /** Pick a random element from an array; returns undefined if empty. */
@@ -28,7 +29,7 @@ function pickRandom<T>(arr: T[], faker: Faker): T | undefined {
 /**
  * Pick a random subset of an array — 1 to min(5, length) items normally, or the length the
  * active QA list profile asks for. Items are drawn without replacement, so a `huge` profile
- * is capped by the pool; `qaDefaultCount` grows the pools to compensate.
+ * is capped by the pool; `ResolvedOptions.defaultCount` grows the pools to compensate.
  */
 function pickSubset<T>(arr: T[], faker: Faker, qa: ResolvedQa | undefined): T[] {
   if (arr.length === 0) return [];
@@ -42,19 +43,18 @@ function pickSubset<T>(arr: T[], faker: Faker, qa: ResolvedQa | undefined): T[] 
 
 function createMockResult(
   pool: Record<string, unknown[]>,
-  faker: Faker,
   schema: GraphQLSchema,
-  options: BuildMocksOptions,
+  resolved: ResolvedOptions,
 ): MockResult {
+  const { faker } = resolved;
   const dataForOperation = (
-    document: Parameters<typeof resolveOperationData>[4],
+    document: Parameters<typeof resolveOperationData>[3],
     variables?: Record<string, unknown>,
   ) =>
     resolveOperationData(
       schema,
       pool as Record<string, Record<string, unknown>[]>,
-      faker,
-      options,
+      resolved,
       document,
       variables,
     );
@@ -101,9 +101,8 @@ function createMockResult(
 }
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
-  const faker = resolveFaker(options);
-  const qaContext = qaContextFor(options);
-  const { qa } = qaContext;
+  const resolved = resolveOptions(options);
+  const { faker, qa, nullChance } = resolved;
 
   // Collect all non-operation, non-builtin object types
   const typeMap = schema.getTypeMap();
@@ -113,17 +112,15 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   );
 
   // Phase 1: generate N instances per type with scalar/enum fields only
-  const addTypename = options.addTypename ?? true;
-  const stableIds = options.stableIds ?? false;
+  const { addTypename, stableIds } = resolved;
   const pool: Record<string, Record<string, unknown>[]> = {};
-  // A `huge` list profile needs pools at least as large as the target length, since lists
-  // are sampled without replacement. An explicit `count` still wins over this.
-  const defaultCount = qaDefaultCount(qa, 5);
   for (const objectType of objectTypes) {
-    const count = resolveCount(objectType.name, options.count, defaultCount);
-    const idOverridden = options.overrides?.[objectType.name]?.id !== undefined;
+    // `defaultCount` already accounts for a `huge` list profile needing pools at least as
+    // large as the target length, since lists are sampled without replacement.
+    const count = resolveCount(objectType.name, resolved.count, resolved.defaultCount);
+    const idOverridden = resolved.overrides[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
-      const instance = mockTypeScalars(objectType, faker, options, qaContext);
+      const instance = mockTypeScalars(objectType, resolved);
       if (addTypename) instance.__typename = objectType.name;
       if (stableIds && !idOverridden && 'id' in instance) {
         instance.id = `${objectType.name}-${index}`;
@@ -136,7 +133,6 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   for (const objectType of objectTypes) {
     const instances = pool[objectType.name] ?? [];
     const fields = objectType.getFields();
-    const nullChance = qaNullChance(qa) ?? options.nullChance ?? 0;
 
     for (const instance of instances) {
       for (const [fieldName, field] of Object.entries(fields)) {
@@ -167,14 +163,14 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
         }
 
         if (isInterfaceType(namedType) || isUnionType(namedType)) {
-          if (!options.resolveType) {
+          if (!resolved.resolveType) {
             console.warn(
               `[graphql-mocks] Field "${objectType.name}.${fieldName}" returns abstract type "${namedType.name}" — provide resolveType option to mock it`,
             );
             instance[fieldName] = null;
             continue;
           }
-          const concreteName = options.resolveType(namedType.name);
+          const concreteName = resolved.resolveType(namedType.name);
           if (!(concreteName in pool)) {
             console.warn(
               `[graphql-mocks] resolveType returned unknown type "${concreteName}" for "${namedType.name}" — field will be null/empty`,
@@ -189,5 +185,5 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
     }
   }
 
-  return createMockResult(pool as Record<string, unknown[]>, faker, schema, options);
+  return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }
