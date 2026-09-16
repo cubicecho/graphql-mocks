@@ -80,6 +80,34 @@ describe('mockTypeScalars', () => {
     expect(result.name).toBe('fixed-name');
   });
 
+  it('hands an override its site and the instance index', () => {
+    const sites: unknown[] = [];
+    const resolved = opts({
+      overrides: {
+        Widget: {
+          name: (_f, ctx) => {
+            sites.push(ctx);
+            return `widget-${ctx.index}`;
+          },
+        },
+      },
+    });
+    expect(mockTypeScalars(widgetType, resolved, 0).name).toBe('widget-0');
+    expect(mockTypeScalars(widgetType, resolved, 3).name).toBe('widget-3');
+    expect(sites).toEqual([
+      { index: 0, typeName: 'Widget', fieldName: 'name' },
+      { index: 3, typeName: 'Widget', fieldName: 'name' },
+    ]);
+  });
+
+  it('defaults the index to 0 when the caller has none', () => {
+    const result = mockTypeScalars(
+      widgetType,
+      opts({ overrides: { Widget: { name: (_f, { index }) => String(index) } } }),
+    );
+    expect(result.name).toBe('0');
+  });
+
   it('generates list enum fields as arrays of enum values', () => {
     const listEnumSchema = buildSchema(`
       enum Color { RED GREEN BLUE }

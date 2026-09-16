@@ -322,7 +322,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
     );
     const idOverridden = resolved.overrides[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
-      const instance = mockTypeScalars(objectType, resolved);
+      const instance = mockTypeScalars(objectType, resolved, index);
       if (addTypename) instance.__typename = objectType.name;
       if (stableIds && !idOverridden && 'id' in instance) {
         instance.id = `${objectType.name}-${index}`;

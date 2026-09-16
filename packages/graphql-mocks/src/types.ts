@@ -4,15 +4,29 @@ import type { DocumentNode } from 'graphql';
 import type { MockOperationOptions, MockOperationVariants, MockedResponse } from './apolloMocks.js';
 
 export type ScalarMocker = (faker: Faker) => unknown;
+
+/** Where an override is firing — the instance's position in its pool, and the field's site. */
+export interface OverrideContext {
+  /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
+  index: number;
+  typeName: string;
+  fieldName: string;
+}
+
 /**
  * Per-field override. Receives the same (seeded) faker instance the generator uses, so
- * overrides stay deterministic under `seed` without importing a separate faker.
+ * overrides stay deterministic under `seed` without importing a separate faker, plus the
+ * site it is firing at — which makes per-instance cohorts a one-liner:
+ *
+ * ```ts
+ * overrides: { User: { loginCount: (f, { index }) => (index === 0 ? 0 : f.number.int(500)) } }
+ * ```
  *
  * @typeParam T - The field's value type. When `BuildMocksOptions` is parameterized with a
  * `TTypes` map (e.g. the codegen `SchemaTypeMap`), the return type is bound to the field's
  * own type, so `overrides: { User: { id: () => 5 } }` errors when `id` is a string.
  */
-export type FieldOverrideFn<T = unknown> = (faker: Faker) => T;
+export type FieldOverrideFn<T = unknown> = (faker: Faker, ctx: OverrideContext) => T;
 
 /**
  * Per-type instance counts. When `TTypes` is supplied, the keys autocomplete to the schema's

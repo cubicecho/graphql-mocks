@@ -47,10 +47,14 @@ export function unwrapType(type: GraphQLType): UnwrappedType {
 /**
  * Phase 1: Generate a single mock object for an object type, populating
  * only scalar and enum fields. Relationship fields are left for phase 2.
+ *
+ * `index` is the instance's position in its own pool; it reaches overrides through their
+ * context argument, so an override can vary by instance without tracking its own counter.
  */
 export function mockTypeScalars(
   typeDef: GraphQLObjectType,
   resolved: ResolvedOptions,
+  index = 0,
 ): Record<string, unknown> {
   const fields = typeDef.getFields();
   const result: Record<string, unknown> = {};
@@ -60,7 +64,11 @@ export function mockTypeScalars(
 
   for (const [fieldName, field] of Object.entries(fields)) {
     if (typeOverrides[fieldName]) {
-      result[fieldName] = typeOverrides[fieldName]?.(faker);
+      result[fieldName] = typeOverrides[fieldName]?.(faker, {
+        index,
+        typeName: typeDef.name,
+        fieldName,
+      });
       continue;
     }
 
