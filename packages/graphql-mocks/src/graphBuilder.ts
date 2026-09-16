@@ -16,7 +16,8 @@ import {
 } from './apolloMocks.js';
 import { resolveOperationData } from './executeOperation.js';
 import { OPERATION_TYPE_NAMES, resolveCount, resolveFaker } from './helpers.js';
-import { mockTypeScalars, unwrapType } from './typeMocker.js';
+import { type ResolvedQa, qaDefaultCount, qaListLength, qaNullChance } from './qa.js';
+import { mockTypeScalars, qaContextFor, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, MockResult } from './types.js';
 
 /** Pick a random element from an array; returns undefined if empty. */
@@ -24,12 +25,18 @@ function pickRandom<T>(arr: T[], faker: Faker): T | undefined {
   return arr.length === 0 ? undefined : faker.helpers.arrayElement(arr);
 }
 
-/** Pick a random subset of an array (1 to min(5, length) items). */
-function pickSubset<T>(arr: T[], faker: Faker): T[] {
+/**
+ * Pick a random subset of an array — 1 to min(5, length) items normally, or the length the
+ * active QA list profile asks for. Items are drawn without replacement, so a `huge` profile
+ * is capped by the pool; `qaDefaultCount` grows the pools to compensate.
+ */
+function pickSubset<T>(arr: T[], faker: Faker, qa: ResolvedQa | undefined): T[] {
   if (arr.length === 0) return [];
+  const { min, max } = qaListLength(qa, { min: 1, max: 5 });
+  if (max === 0) return [];
   return faker.helpers.arrayElements(arr, {
-    min: 1,
-    max: Math.min(5, arr.length),
+    min: Math.min(min, arr.length),
+    max: Math.min(max, arr.length),
   });
 }
 
@@ -95,6 +102,8 @@ function createMockResult(
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const faker = resolveFaker(options);
+  const qaContext = qaContextFor(options);
+  const { qa } = qaContext;
 
   // Collect all non-operation, non-builtin object types
   const typeMap = schema.getTypeMap();
@@ -107,11 +116,14 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   const addTypename = options.addTypename ?? true;
   const stableIds = options.stableIds ?? false;
   const pool: Record<string, Record<string, unknown>[]> = {};
+  // A `huge` list profile needs pools at least as large as the target length, since lists
+  // are sampled without replacement. An explicit `count` still wins over this.
+  const defaultCount = qaDefaultCount(qa, 5);
   for (const objectType of objectTypes) {
-    const count = resolveCount(objectType.name, options.count);
+    const count = resolveCount(objectType.name, options.count, defaultCount);
     const idOverridden = options.overrides?.[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
-      const instance = mockTypeScalars(objectType, faker, options);
+      const instance = mockTypeScalars(objectType, faker, options, qaContext);
       if (addTypename) instance.__typename = objectType.name;
       if (stableIds && !idOverridden && 'id' in instance) {
         instance.id = `${objectType.name}-${index}`;
@@ -124,7 +136,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   for (const objectType of objectTypes) {
     const instances = pool[objectType.name] ?? [];
     const fields = objectType.getFields();
-    const nullChance = options.nullChance ?? 0;
+    const nullChance = qaNullChance(qa) ?? options.nullChance ?? 0;
 
     for (const instance of instances) {
       for (const [fieldName, field] of Object.entries(fields)) {
@@ -149,7 +161,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
             continue;
           }
           instance[fieldName] = isList
-            ? pickSubset(relatedPool, faker)
+            ? pickSubset(relatedPool, faker, qa)
             : pickRandom(relatedPool, faker);
           continue;
         }
@@ -170,7 +182,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           }
           const concretePool = pool[concreteName] ?? [];
           instance[fieldName] = isList
-            ? pickSubset(concretePool, faker)
+            ? pickSubset(concretePool, faker, qa)
             : pickRandom(concretePool, faker);
         }
       }

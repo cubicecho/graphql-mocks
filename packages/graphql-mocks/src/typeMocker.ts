@@ -8,8 +8,16 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
+import {
+  type ResolvedQa,
+  qaFallbackText,
+  qaListLength,
+  qaNullChance,
+  qaScalarMockers,
+  resolveQa,
+} from './qa.js';
 import { resolveScalarMocker } from './scalarMockers.js';
-import type { BuildMocksOptions } from './types.js';
+import type { BuildMocksOptions, ScalarMocker } from './types.js';
 
 export interface UnwrappedType {
   namedType: GraphQLNamedType;
@@ -52,11 +60,16 @@ export function mockTypeScalars(
   typeDef: GraphQLObjectType,
   faker: Faker,
   options: BuildMocksOptions,
+  // Precomputed by the caller so the QA config and its scalar map are built once per build
+  // rather than once per instance. Omitted (and derived here) when called directly.
+  qaContext: QaContext = qaContextFor(options),
 ): Record<string, unknown> {
   const fields = typeDef.getFields();
   const result: Record<string, unknown> = {};
   const typeOverrides = options.overrides?.[typeDef.name] ?? {};
-  const nullChance = options.nullChance ?? 0;
+  const { qa, qaScalars } = qaContext;
+  const nullChance = qaNullChance(qa) ?? options.nullChance ?? 0;
+  const listLength = qaListLength(qa, { min: 1, max: 3 });
 
   for (const [fieldName, field] of Object.entries(fields)) {
     if (typeOverrides[fieldName]) {
@@ -78,7 +91,7 @@ export function mockTypeScalars(
     if (isEnumType(namedType)) {
       const values = namedType.getValues();
       if (isList) {
-        const count = faker.number.int({ min: 1, max: 3 });
+        const count = faker.number.int(listLength);
         result[fieldName] = Array.from(
           { length: count },
           () => faker.helpers.arrayElement(values)?.value ?? null,
@@ -89,21 +102,35 @@ export function mockTypeScalars(
       continue;
     }
 
-    const mocker = resolveScalarMocker(namedType.name, options.scalars);
+    const mocker = resolveScalarMocker(namedType.name, options.scalars, qaScalars);
     if (!mocker) {
       console.warn(
         `[graphql-mocks] Unknown scalar "${namedType.name}" on ${typeDef.name}.${fieldName} — falling back to faker.lorem.word()`,
       );
+      // An unrecognized scalar is almost always string-shaped, so a text profile should
+      // reach it too — otherwise QA mode quietly skips every custom scalar in the schema.
+      const fallback = () => qaFallbackText(faker, qa) ?? faker.lorem.word();
       result[fieldName] = isList
-        ? Array.from({ length: faker.number.int({ min: 1, max: 3 }) }, () => faker.lorem.word())
-        : faker.lorem.word();
+        ? Array.from({ length: faker.number.int(listLength) }, fallback)
+        : fallback();
       continue;
     }
 
     result[fieldName] = isList
-      ? Array.from({ length: faker.number.int({ min: 1, max: 3 }) }, () => mocker(faker))
+      ? Array.from({ length: faker.number.int(listLength) }, () => mocker(faker))
       : mocker(faker);
   }
 
   return result;
+}
+
+/** QA config plus its derived scalar map, built once per `buildGraph` call. */
+export interface QaContext {
+  qa: ResolvedQa | undefined;
+  qaScalars: Record<string, ScalarMocker> | undefined;
+}
+
+export function qaContextFor(options: BuildMocksOptions): QaContext {
+  const qa = resolveQa(options.qa);
+  return { qa, qaScalars: qa ? qaScalarMockers(qa) : undefined };
 }

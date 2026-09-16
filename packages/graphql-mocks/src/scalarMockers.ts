@@ -64,12 +64,15 @@ export const defaultScalarMockers: Record<string, ScalarMocker> = {
 
 /**
  * Returns the mocker to use for a given scalar name.
- * User-supplied scalars take priority over defaults.
- * Returns undefined if neither provides a mocker.
+ * Precedence: user-supplied `scalars` > QA-mode mockers > built-in defaults — so turning QA
+ * mode on never silently discards an explicit mocker, and any scalar the active QA profile
+ * doesn't claim keeps its realistic default.
+ * Returns undefined if none of the three provides a mocker.
  */
 export function resolveScalarMocker(
   scalarName: string,
   userScalars: Record<string, ScalarMocker> | undefined,
+  qaScalars?: Record<string, ScalarMocker>,
 ): ScalarMocker | undefined {
-  return userScalars?.[scalarName] ?? defaultScalarMockers[scalarName];
+  return userScalars?.[scalarName] ?? qaScalars?.[scalarName] ?? defaultScalarMockers[scalarName];
 }

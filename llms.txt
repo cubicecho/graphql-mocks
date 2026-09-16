@@ -12,7 +12,7 @@ Key facts:
 ## Documentation
 
 - [Monorepo overview](https://github.com/vantreeseba/graphql-mocks/blob/main/README.md): Packages table and development workflow.
-- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, resolveType, addTypename, stableIds), typed pools, and helpers.
+- [Runtime: @vantreeseba/graphql-mocks](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks/README.md): `buildMocks` API, options (count, seed, nullChance, scalars, overrides, resolveType, addTypename, stableIds, qa), QA mode, typed pools, and helpers.
 - [Codegen plugin: @vantreeseba/graphql-mocks-codegen](https://github.com/vantreeseba/graphql-mocks/blob/main/packages/graphql-mocks-codegen/README.md): generating a `SchemaTypeMap`, plugin configuration (`typeMapName`, `typesImportPath`, `typesNamespace`), and generated output.
 - [AGENTS.md](https://github.com/vantreeseba/graphql-mocks/blob/main/AGENTS.md): Project structure, stack, conventions, and contributor guidance.
 
@@ -24,7 +24,9 @@ Key facts:
 - `MockResult.dataForOperation(document, variables?)`: Execute a query/mutation against the graph and return data shaped to the selection set (lists, fragments, and interface/union fields supported). Return type inferred from a `TypedDocumentNode`.
 - `mockOperation(query, data, options?)` / `mockOperationVariants(...)`: Build Apollo `MockedProvider` `MockedResponse` entries from supplied result data (`options`: `variables`, `delay`, `error`, `maxUsageCount`).
 - `MockResult.mockOperation(query, options?)` / `MockResult.mockOperationVariants(...)`: Same, but resolve the result data from the `MockResult` graph (via `dataForOperation`) so the query's selection set selects the mocks — no data argument needed.
-- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `resolveType`, `addTypename`, `stableIds`.
+- `BuildMocksOptions`: `count`, `faker`, `seed`, `nullChance`, `scalars`, `overrides`, `resolveType`, `addTypename`, `stableIds`, `qa`.
+- `buildQaSets(schema, options?)`: QA mode. Returns one `{ name, qa, mocks }` set per profile (`QA_PROFILE_NAMES`, or a `profiles` subset), each built from its own seeded faker so a set reproduces independently of the others. Accepts every `BuildMocksOptions` key plus `profiles` and a shared `qa` config the profile merges over.
+- `qa` option (`QaProfileName | QaConfig | false`): swaps generators for deliberately out-of-norm values across five dimensions — `text` (`empty`/`whitespace`/`long`/`unicode`/`injection`), `lists` (`empty`/`single`/`huge`, sized by `listSize`, default 100), `nulls` (`none`/`all`/`mixed`), `numbers` (`zero`/`negative`/`boundary`), `dates` (`epoch`/`farPast`/`farFuture`/`mixed`). `scalars` and `overrides` still win; `ID` is left alone; built-in scalars stay serializable but custom scalar constraints are not respected.
 - `@vantreeseba/graphql-mocks-codegen` plugin: emits `export type SchemaTypeMap = { … }` for every object type (root operation and introspection types excluded, entries sorted).
 
 ## Examples
@@ -38,6 +40,8 @@ Key facts:
 - Typed pools: `buildMocks<{ User: User; Todo: Todo }>(schema)` or `buildMocks<SchemaTypeMap>(schema)`.
 - Operation data: `const data = mocks.dataForOperation(UserByIdQuery)` → `{ user: { …selected fields, nested via wired refs… } }`.
 - Apollo MockedProvider (data from the graph): `<MockedProvider mocks={[mocks.mockOperation(AwardByIdQuery)]} />`.
+- QA mode, single profile: `buildMocks(schema, { seed: 42, qa: 'longText' })` or tuned: `buildMocks(schema, { qa: { text: 'unicode', lists: 'huge', nulls: 'mixed' } })`.
+- QA sets for Storybook/Apollo: `buildQaSets(schema, { seed: 42 }).map((set) => ({ name: set.name, parameters: { apolloClient: { mocks: [set.mocks.mockOperation(UsersQuery)] } } }))`.
 
 ## Optional
 

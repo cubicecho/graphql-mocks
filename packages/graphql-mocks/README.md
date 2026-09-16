@@ -170,6 +170,87 @@ m.withError;        // rejects with an error naming the operation
 
 `@graphql-typed-document-node/core` (bundled with Apollo Client and graphql-codegen) provides the `TypedDocumentNode` type; it's an optional peer, only needed if you use these helpers.
 
+## QA mode
+
+Mocks are realistic by default, and realistic data never finds the bug where a 400-character
+product name blows out a flex row, or an empty list renders a blank panel instead of an empty
+state. The `qa` option swaps the generators for deliberately out-of-norm ones, so the same
+`buildMocks` call your story already makes can produce the data that breaks it.
+
+```ts
+// a named profile
+const mocks = buildMocks(schema, { seed: 42, qa: 'longText' });
+
+// or tune the dimensions yourself
+const mocks = buildMocks(schema, {
+  qa: { text: 'unicode', lists: 'huge', nulls: 'mixed', numbers: 'boundary' },
+});
+```
+
+### Profiles
+
+`buildQaSets` generates one mock pool per profile — the shape Storybook and `MockedProvider`
+want, one variant per row:
+
+```ts
+import { buildQaSets } from '@vantreeseba/graphql-mocks';
+
+const sets = buildQaSets(schema, { seed: 42 });
+// [{ name: 'emptyText', qa: { text: 'empty' }, mocks }, { name: 'whitespaceText', ... }, ...]
+
+// or just the ones you care about
+const sets = buildQaSets(schema, { seed: 42, profiles: ['emptyText', 'hugeLists'] });
+```
+
+| Profile | Config | What it stresses |
+|---------|--------|------------------|
+| `emptyText` | `{ text: 'empty' }` | Empty strings — labels, headings, alt text |
+| `whitespaceText` | `{ text: 'whitespace' }` | Spaces, tabs, newlines, non-breaking spaces |
+| `longText` | `{ text: 'long' }` | 1k-char unbroken tokens and long prose — overflow, truncation |
+| `unicodeText` | `{ text: 'unicode' }` | ZWJ emoji, RTL, bidi, CJK, combining marks, zalgo |
+| `injectionText` | `{ text: 'injection' }` | `<script>`, template syntax, path traversal — escaping |
+| `emptyLists` | `{ lists: 'empty' }` | Empty states |
+| `singleItemLists` | `{ lists: 'single' }` | "1 item" grammar, single-row layouts |
+| `hugeLists` | `{ lists: 'huge' }` | 100-item lists — virtualization, pagination, perf |
+| `allNulls` | `{ nulls: 'all' }` | Every nullable field null |
+| `mixedNulls` | `{ nulls: 'mixed' }` | Partial nulls — the realistic failure mode |
+| `zeroNumbers` | `{ numbers: 'zero' }` | `0` everywhere — division, percentages, empty totals |
+| `negativeNumbers` | `{ numbers: 'negative' }` | Negative counts, prices, durations |
+| `boundaryNumbers` | `{ numbers: 'boundary' }` | Int 32-bit limits, `MAX_SAFE_INTEGER`, `-0`, `0.1 + 0.2` |
+| `extremeDates` | `{ dates: 'mixed' }` | Epoch, far past/future, leap day, DST transitions |
+| `kitchenSink` | all of the above | Everything at once |
+
+`QA_PROFILE_NAMES` and `QA_PROFILES` are exported if you want to build the list yourself.
+
+### With Storybook + Apollo
+
+```ts
+const sets = buildQaSets(schema, { seed: 42, profiles: ['emptyText', 'longText', 'emptyLists'] });
+
+export const QaVariants = sets.map((set) => ({
+  name: set.name,
+  parameters: { apolloClient: { mocks: [set.mocks.mockOperation(UsersQuery)] } },
+}));
+```
+
+Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
+identically no matter which other profiles ran alongside it — when one variant breaks, rerunning
+just that profile gives you the same data back.
+
+### Notes
+
+- `scalars` and `overrides` still win. QA only replaces the generators you haven't defined
+  yourself, so a field you pinned stays pinned.
+- `ID` is left alone. Ids are graph identity and Apollo cache keys; mangling them would break
+  wiring rather than test it.
+- Values stay serializable by the built-in scalars (`Int` is clamped to its 32-bit range, for
+  instance), but custom scalar *constraints* are deliberately not respected — a negative
+  `NonNegativeInt` is the point, not a bug.
+- `lists: 'huge'` raises the default `count` to `listSize` (100), because relationship lists are
+  sampled from the pools without replacement. An explicit `count` still wins, which caps how long
+  those lists can get.
+- `qa: false` disables QA, handy when the profile comes from a variable.
+
 ## Typed pools
 
 Pools are `unknown[]` by default — the type names and shapes only exist at runtime (in the schema), so they can't be inferred from the `schema` argument. Pass an optional `TTypes` map to declare them and the matching pools come back typed, no cast needed:
@@ -270,3 +351,4 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
+| `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |

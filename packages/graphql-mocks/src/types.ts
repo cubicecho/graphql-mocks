@@ -40,6 +40,63 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/** How string-shaped scalars behave under QA mode. */
+export type QaTextProfile = 'empty' | 'whitespace' | 'long' | 'unicode' | 'injection';
+/** How numeric scalars behave under QA mode. */
+export type QaNumberProfile = 'zero' | 'negative' | 'boundary';
+/** How date/time scalars behave under QA mode. */
+export type QaDateProfile = 'epoch' | 'farPast' | 'farFuture' | 'mixed';
+/** How list-valued fields are sized under QA mode. */
+export type QaListProfile = 'empty' | 'single' | 'huge';
+/** How nullable fields behave under QA mode. */
+export type QaNullProfile = 'none' | 'all' | 'mixed';
+
+/**
+ * Per-dimension QA settings. Every dimension is independent and optional — anything left
+ * unset keeps its normal, realistic generator, so a set can isolate exactly one variable.
+ */
+export interface QaConfig {
+  /** Weird strings for `String` and the string-shaped custom scalars. `ID` is left alone. */
+  text?: QaTextProfile;
+  /** Zero / negative / boundary values for integer and float scalars. */
+  numbers?: QaNumberProfile;
+  /** Epoch, far-past, far-future and calendar-edge timestamps for date scalars. */
+  dates?: QaDateProfile;
+  /** Force list fields to be empty, single-item, or very long. */
+  lists?: QaListProfile;
+  /** Force nullable fields to be null, never null, or a mix. Maps onto `nullChance`. */
+  nulls?: QaNullProfile;
+  /**
+   * Target length for `lists: 'huge'`. Pools are grown to match unless `count` says otherwise.
+   * @default 100
+   */
+  listSize?: number;
+}
+
+/**
+ * Names of the built-in QA presets. Each isolates one dimension, except `kitchenSink`
+ * which combines them for a worst-case smoke test.
+ */
+export type QaProfileName =
+  | 'emptyText'
+  | 'whitespaceText'
+  | 'longText'
+  | 'unicodeText'
+  | 'injectionText'
+  | 'emptyLists'
+  | 'singleItemLists'
+  | 'hugeLists'
+  | 'allNulls'
+  | 'mixedNulls'
+  | 'zeroNumbers'
+  | 'negativeNumbers'
+  | 'boundaryNumbers'
+  | 'extremeDates'
+  | 'kitchenSink';
+
+/** A preset name, an explicit per-dimension config, or `false` to disable QA mode. */
+export type QaOption = QaProfileName | QaConfig | false;
+
 export interface BuildMocksOptions<
   TTypes extends Record<string, unknown> = Record<string, unknown>,
 > {
@@ -78,6 +135,24 @@ export interface BuildMocksOptions<
    * @default true
    */
   addTypename?: boolean;
+  /**
+   * Generate deliberately out-of-norm data instead of realistic data — empty or very long
+   * strings, emoji and RTL text, empty or huge lists, all-null fields, boundary numbers and
+   * extreme dates. Pass a preset name or a per-dimension {@link QaConfig}:
+   *
+   * ```ts
+   * buildMocks(schema, { qa: 'longText' });
+   * buildMocks(schema, { qa: { text: 'unicode', lists: 'empty', nulls: 'all' } });
+   * ```
+   *
+   * QA values stay serializable by the built-in scalars so `dataForOperation` keeps working,
+   * but they are not guaranteed to satisfy custom scalar constraints — an empty
+   * `NonEmptyString` is the point, not a bug. An explicit `scalars` or `overrides` entry
+   * still wins over the QA generator.
+   *
+   * Use `buildQaSets` to get one pool per preset in a single call.
+   */
+  qa?: QaOption;
   /**
    * Give every object with an `id` field a stable, unique id of the form `TypeName-<index>`
    * instead of a random scalar value. Keeps cache keys distinct and output readable.

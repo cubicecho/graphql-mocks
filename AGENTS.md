@@ -41,7 +41,10 @@ packages/
       scalarMockers.ts        — default scalar → faker mapping
       typeMocker.ts           — per-type field mock generator
       graphBuilder.ts         — assembles cross-type relationships into a graph
+      executeOperation.ts     — runs an operation against the graph (dataForOperation)
       apolloMocks.ts          — Apollo MockedProvider mock builders (mockOperation)
+      qa.ts                   — QA mode: profiles, weird-value corpora, resolution helpers
+      qaSets.ts               — buildQaSets(): one mock pool per QA profile
       helpers.ts              — utility functions
       types.ts                — all public TypeScript types
       test/schema.ts          — test GraphQL schema (rich, with custom scalars)
