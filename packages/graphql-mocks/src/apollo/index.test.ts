@@ -4,6 +4,7 @@ import { buildMocks } from '../mockSchema.js';
 import { schema } from '../test/schema.js';
 import type { BuildMocksOptions } from '../types.js';
 import {
+  type CreateMockClientOptions,
   type MockApolloClient,
   type MockClientParameter,
   createMockClient,
@@ -142,6 +143,29 @@ describe('createMockClient', () => {
     // The key that was not named survives, as does the operation kind that was not named.
     expect(client.defaultOptions.query?.errorPolicy).toBe('all');
     expect(client.defaultOptions.watchQuery?.fetchPolicy).toBe('no-cache');
+  });
+
+  it('takes one operation kind without restating the others', () => {
+    // The whole point of the deep partial: `mutate` alone, and `errorPolicy` spelled as a value
+    // rather than as Apollo 4's "declare it first" sentence.
+    const client = createMockClient(graph(), {
+      defaultOptions: { mutate: { errorPolicy: 'all' } },
+    });
+    expect(client.defaultOptions.mutate?.errorPolicy).toBe('all');
+    expect(client.defaultOptions.query?.fetchPolicy).toBe('no-cache');
+    expect(client.defaultOptions.watchQuery?.errorPolicy).toBe('all');
+  });
+
+  it('still rejects a key or a value that is not an option', () => {
+    const options: CreateMockClientOptions = {
+      // @ts-expect-error not an option of `query`
+      defaultOptions: { query: { nonsense: true } },
+    };
+    const wrongValue: CreateMockClientOptions = {
+      // @ts-expect-error not a fetch policy
+      defaultOptions: { query: { fetchPolicy: 'whenever' } },
+    };
+    expect([options, wrongValue]).toHaveLength(2);
   });
 
   it('accepts an explicit cache', () => {

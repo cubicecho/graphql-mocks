@@ -77,13 +77,33 @@ export type MockApolloClient = InstanceType<typeof ApolloClient>;
  */
 type ApolloClientArgs = ConstructorParameters<typeof ApolloClient>[0];
 
+/**
+ * A deep partial of Apollo's `defaultOptions`: every operation kind optional, and every key of
+ * every kind optional. That is what {@link createMockClient}'s merge already does — it fills in
+ * per kind and then per key — so naming one kind, or one key of one kind, is supported and
+ * everything left out keeps this module's own default.
+ *
+ * Each kind is read off the matching client method rather than off Apollo's `defaultOptions`
+ * type, for two reasons. Apollo 4 makes a kind *required* once an app declares required keys for
+ * it, so a caller adding one `mutate` key would have to restate the `no-cache` /
+ * `errorPolicy: 'all'` defaults below verbatim — restatements that then stop tracking the
+ * defaults they copied. And Apollo 4 types `errorPolicy` on that same input as a sentence telling
+ * you to declare it first, which makes the library's own documented default unwritable. The call
+ * options carry the real types, and both majors have these three methods.
+ */
+export interface PartialDefaultOptions {
+  watchQuery?: Partial<Omit<Parameters<MockApolloClient['watchQuery']>[0], 'query'>>;
+  query?: Partial<Omit<Parameters<MockApolloClient['query']>[0], 'query'>>;
+  mutate?: Partial<Omit<Parameters<MockApolloClient['mutate']>[0], 'mutation'>>;
+}
+
 export interface CreateMockClientOptions extends MockHandlerOptions {
   /** Replace the per-call `InMemoryCache`. Supplying one opts out of the isolation below. */
   cache?: ApolloClientArgs['cache'];
   /** Replace the link entirely — for chaining the mock link behind an auth or error link. */
   link?: ApolloLink;
-  /** Merged over the defaults below, per operation kind and then per key. */
-  defaultOptions?: ApolloClientArgs['defaultOptions'];
+  /** Merged over the defaults below, per operation kind and then per key, so one key is enough. */
+  defaultOptions?: PartialDefaultOptions;
   /** Anything else the `ApolloClient` constructor takes; the three options above win over it. */
   clientOptions?: Partial<ApolloClientArgs>;
 }
@@ -94,17 +114,17 @@ export interface CreateMockClientOptions extends MockHandlerOptions {
  * across two graphs would merge them. `errorPolicy: 'all'` because an error state is a state a
  * story wants to render, not a rejected promise nobody catches.
  */
-const DEFAULT_CLIENT_DEFAULTS = {
+const DEFAULT_CLIENT_DEFAULTS: PartialDefaultOptions = {
   watchQuery: { fetchPolicy: 'no-cache', errorPolicy: 'all' },
   query: { fetchPolicy: 'no-cache', errorPolicy: 'all' },
-} as const;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function mergeDefaultOptions(
-  override: ApolloClientArgs['defaultOptions'],
+  override: PartialDefaultOptions | undefined,
 ): ApolloClientArgs['defaultOptions'] {
   const merged: Record<string, unknown> = { ...DEFAULT_CLIENT_DEFAULTS };
   for (const [key, value] of Object.entries((override ?? {}) as Record<string, unknown>)) {
