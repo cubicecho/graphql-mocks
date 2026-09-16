@@ -4,6 +4,7 @@ import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js'
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
+  ArgOverride,
   BuildMocksOptions,
   CountConfig,
   OverridesConfig,
@@ -44,6 +45,8 @@ export interface ResolvedOptions {
    * `resolveArgMatching` is what folds the two together at the point of use.
    */
   matchArguments: boolean | ArgMatchingOptions | undefined;
+  /** Argument-matched field answers, in declaration order — first match wins. */
+  argOverrides: readonly ArgOverride[];
   /** Prepended to every stable id. Empty unless the caller (or `buildMatrix`) sets it. */
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
@@ -71,6 +74,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     stableIds: options.stableIds ?? false,
     listSize: resolveListSize(options.listSize),
     matchArguments: options.matchArguments,
+    argOverrides: options.argOverrides ?? [],
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},

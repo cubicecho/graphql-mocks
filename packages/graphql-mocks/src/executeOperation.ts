@@ -1,3 +1,4 @@
+import type { Faker } from '@faker-js/faker';
 import {
   type DocumentNode,
   type GraphQLField,
@@ -27,12 +28,14 @@ import {
   activeArgNames,
   applyArgPlan,
   buildArgPlan,
+  partitionWindow,
   resolveArgMatching,
 } from './argMatching.js';
 import { qaFallbackText, qaListLength } from './qa.js';
 import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
+import type { ArgOverride, ArgOverrideContext } from './types.js';
 
 type Pool = Record<string, Record<string, unknown>[]>;
 
@@ -100,6 +103,77 @@ function planFor(
   if (!ctx.arg.enabled) return null;
   const active = activeArgNames(info.fieldNodes, args, ctx.synthesized);
   return buildArgPlan(fieldDefinition(info), named, isList, args, active, ctx.arg);
+}
+
+/** Structural equality, enough for comparing coerced argument values. */
+function sameArgValue(expected: unknown, actual: unknown): boolean {
+  if (expected === actual) return true;
+  if (typeof expected !== 'object' || typeof actual !== 'object') return false;
+  if (expected === null || actual === null) return false;
+  return JSON.stringify(expected) === JSON.stringify(actual);
+}
+
+/** Whether one override's `match` describes this field selection. */
+function overrideMatches(
+  override: ArgOverride,
+  parentTypeName: string,
+  fieldName: string,
+  args: Record<string, unknown>,
+): boolean {
+  const { match } = override;
+  if (match.field !== fieldName) return false;
+  if (match.type !== undefined && match.type !== parentTypeName) return false;
+  if (match.predicate) return match.predicate(args);
+  if (!match.args) return true;
+  return Object.entries(match.args).every(([name, value]) => sameArgValue(value, args[name]));
+}
+
+/**
+ * The first `argOverrides` entry that claims this field, resolved to its value. Wrapped in an
+ * object so an override can legitimately answer with `undefined` or `null`.
+ *
+ * This runs ahead of everything else and ignores `matchArguments` entirely: an override is an
+ * instruction about one field, not an inference from its arguments, and it leaves every other
+ * field of the operation resolving from the graph — which is the whole point of it existing
+ * next to the operation-level overrides a handler takes.
+ */
+function argOverrideFor(
+  ctx: ResolveContext,
+  info: GraphQLResolveInfo,
+  args: Record<string, unknown>,
+): { value: unknown } | undefined {
+  const overrides = ctx.resolved.argOverrides;
+  if (overrides.length === 0) return undefined;
+  const parentTypeName = info.parentType.name;
+  const found = overrides.find((entry) =>
+    overrideMatches(entry, parentTypeName, info.fieldName, args),
+  );
+  if (!found) return undefined;
+  if (typeof found.data !== 'function') return { value: found.data };
+
+  const { named, isList } = unwrapOutput(info.returnType);
+  const resolve = found.data as (context: ArgOverrideContext) => unknown;
+  return {
+    value: resolve({
+      typeName: parentTypeName,
+      fieldName: info.fieldName,
+      args,
+      pool: ctx.pool[named.name] ?? [],
+      isList,
+      faker: ctx.resolved.faker,
+    }),
+  };
+}
+
+/** Take a normally-sized draw off the front of an already-ordered list. */
+function sizedWindow<T>(
+  items: readonly T[],
+  bounds: { min: number; max: number },
+  faker: Faker,
+): T[] {
+  if (items.length === 0) return [];
+  const max = bounds.max === UNBOUNDED ? items.length : Math.min(bounds.max, items.length);
+  return items.slice(0, faker.number.int({ min: Math.min(bounds.min, max), max }));
 }
 
 /**
@@ -203,8 +277,16 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
   const items = pool[named.name];
   if (items && items.length > 0) {
     if (plan) {
-      const { items: matched, filterMissed } = applyArgPlan(items, plan);
+      const source = plan.partitionKey
+        ? partitionWindow(items, plan.partitionKey, items.length)
+        : items;
+      const { items: matched, filterMissed } = applyArgPlan(source, plan);
       if (!filterMissed) {
+        // A partition on its own doesn't select rows, it only says *which* ones — so the draw
+        // is still sized the way an unfiltered one would be, just from a different offset.
+        if (isList && !plan.hasFilters && !plan.hasPaging) {
+          return sizedWindow(matched, bounds, faker);
+        }
         if (isList) return matched;
         // Equality on an id is unique, so the first match is the match; randomizing is noise.
         if (matched.length > 0) return matched[0];
@@ -244,7 +326,19 @@ function applyNestedArgs(
     (item): item is Record<string, unknown> => item != null && typeof item === 'object',
   );
   if (objects.length !== value.length) return value;
-  const { items, filterMissed } = applyArgPlan(objects, plan);
+  // A partition redraws from the type's pool rather than reordering what phase 2 wired, because
+  // reordering three aliases of one field still shows the same rows in three panels. The list
+  // keeps the length it was wired with, so only *which* rows changes.
+  const source = plan.partitionKey
+    ? partitionWindow(
+        (ctx.pool[named.name]?.length ?? 0) >= objects.length
+          ? (ctx.pool[named.name] ?? objects)
+          : objects,
+        plan.partitionKey,
+        objects.length,
+      )
+    : objects;
+  const { items, filterMissed } = applyArgPlan(source, plan);
   if (filterMissed && ctx.arg.onMissList === 'fallback') return value;
   return items;
 }
@@ -341,10 +435,13 @@ export function resolveOperationResult(
     rootValue: {},
     variableValues: values,
     // Root fields draw from the pool; nested fields read the wired references via the default.
-    fieldResolver: (source, args, context, info) =>
-      rootTypeNames.has(info.parentType.name)
+    fieldResolver: (source, args, context, info) => {
+      const override = argOverrideFor(ctx, info, args);
+      if (override) return override.value;
+      return rootTypeNames.has(info.parentType.name)
         ? pickFromPool(ctx, info, args)
-        : applyNestedArgs(ctx, defaultFieldResolver(source, args, context, info), args, info),
+        : applyNestedArgs(ctx, defaultFieldResolver(source, args, context, info), args, info);
+    },
     // Abstract types (interface/union) resolve via the __typename carried by every mock.
     typeResolver: (value) =>
       value && typeof value === 'object' && '__typename' in value

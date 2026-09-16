@@ -217,6 +217,7 @@ buildMocks(schema, {
     limitArgs: ['limit', 'pageSize'],
     ignoreArgs: ['locale'],
     onMiss: { singular: 'fallback', list: 'empty' },
+    partition: true,            // uninterpretable arguments still separate results
   },
 });
 ```
@@ -251,6 +252,46 @@ mocks.mockOperation(SearchUsersQuery, {
   }),
 });
 ```
+
+### Selections that differ only by an argument
+
+A dashboard selects one schema field several times, aliased, with a different argument value each time:
+
+```graphql
+query Dashboard {
+  warehouse(id: $id) {
+    inStock: items(where: IN_STOCK) { ...Row }
+    lowStock: items(where: LOW_STOCK) { ...Row }
+    overStock: items(where: OVER_STOCK) { ...Row }
+  }
+}
+```
+
+One field, three selections, told apart only by an enum nothing can interpret. Without help all three panels render byte-identical rows, which reads as a bug.
+
+**Partitioning** is the cheap default. Any active argument that no bucket could interpret becomes a partition key, and each distinct value deterministically draws a *different* window of the pool — same list lengths, different rows, stable across re-renders:
+
+```ts
+buildMocks(schema, { matchArguments: true });
+// the three panels now show three different sets of items
+```
+
+It does not make the rows *mean* `LOW_STOCK` — nothing here could know what that implies. It makes the gap visible instead of silent. Turn it off with `matchArguments: { partition: false }`.
+
+**`argOverrides`** is the part that actually answers the question, because only you know what the argument means:
+
+```ts
+buildMocks(schema, {
+  argOverrides: [
+    { match: { field: 'items', args: { where: 'LOW_STOCK' } }, data: lowStockRows },
+    { match: { type: 'Query', field: 'items' }, data: ({ pool }) => pool.slice(0, 2) },
+  ],
+});
+```
+
+First match wins. `match.field` is the **schema** field name, never the alias; `match.type` narrows to one parent type; `match.args` compares by value (an input object matches structurally), and `match.predicate` replaces it for anything more involved. `data` is a value, or a function handed `{ typeName, fieldName, args, pool, isList, faker }`.
+
+Every *other* field of the operation still resolves from the graph — which is what an operation-level override on a handler cannot do, and why this exists next to it. `argOverrides` are instructions rather than inferences, so they apply whether or not `matchArguments` is on.
 
 ## Resolver-function mocks
 
@@ -748,3 +789,4 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |
+| `argOverrides` | `ArgOverride[]` | `[]` | Answer one field by its argument values — see [Selections that differ only by an argument](#selections-that-differ-only-by-an-argument) |

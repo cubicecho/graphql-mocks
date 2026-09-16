@@ -47,6 +47,18 @@ export interface ArgMatchingOptions {
    * @default { singular: 'fallback', list: 'empty' }
    */
   onMiss?: ArgMissBehavior | { singular?: ArgMissBehavior; list?: ArgMissBehavior };
+  /**
+   * Let an argument nothing else could interpret still *separate* the results. Three aliased
+   * selections of one field differing only by `where: IN_STOCK | LOW_STOCK | OVER_STOCK` would
+   * otherwise render three identical panels, which reads as a bug; with this on, each argument
+   * value deterministically draws a different window of the pool.
+   *
+   * It does not make the rows *mean* the right thing — only the caller knows what `LOW_STOCK`
+   * implies, which is what {@link BuildMocksOptions.argOverrides} is for. It makes the gap
+   * visible instead of silent.
+   * @default true
+   */
+  partition?: boolean;
 }
 
 export interface ResolvedArgMatching {
@@ -61,6 +73,7 @@ export interface ResolvedArgMatching {
   ignoreArgs: ReadonlySet<string>;
   onMissSingular: ArgMissBehavior;
   onMissList: ArgMissBehavior;
+  partition: boolean;
 }
 
 const DEFAULT_OFFSET_ARGS = ['skip', 'offset'] as const;
@@ -90,6 +103,7 @@ export function resolveArgMatching(
     ignoreArgs: new Set(config.ignoreArgs ?? []),
     onMissSingular: missFor('singular', 'fallback'),
     onMissList: missFor('list', 'empty'),
+    partition: config.partition ?? true,
   };
 }
 
@@ -146,6 +160,12 @@ export interface ArgPlan {
   page: PageArgs;
   hasFilters: boolean;
   hasPaging: boolean;
+  /**
+   * The active arguments nothing else could interpret, as a stable `name=value` string. Empty
+   * when there are none. It selects *which* window of the pool the field draws from — see
+   * {@link partitionWindow} — rather than filtering anything.
+   */
+  partitionKey: string;
 }
 
 /** Scalar/enum, non-list fields of a type, which are the only ones equality can match on. */
@@ -206,6 +226,7 @@ export function buildArgPlan(
   const equality: EqualityMatch[] = [];
   const contains: ContainsMatch[] = [];
   const page: PageArgs = {};
+  const partitions: string[] = [];
   let hasPaging = false;
 
   for (const argName of Object.keys(argValues)) {
@@ -238,26 +259,68 @@ export function buildArgPlan(
       }
     }
 
-    if (!config.equality) continue;
+    if (config.equality) {
+      const direct = comparable.get(argName);
+      if (direct && !Array.isArray(value)) {
+        equality.push({ field: argName, values: [value], coerce: direct.isId });
+        continue;
+      }
 
-    const direct = comparable.get(argName);
-    if (direct && !Array.isArray(value)) {
-      equality.push({ field: argName, values: [value], coerce: direct.isId });
-      continue;
+      // `ids: [ID!]` -> an `in` match against the singular `id` field. One character of
+      // tolerance, on an established convention; nothing looser than this.
+      if (Array.isArray(value) && argName.endsWith('s')) {
+        const singular = argName.slice(0, -1);
+        const target = comparable.get(singular);
+        if (target) {
+          equality.push({ field: singular, values: value, coerce: target.isId });
+          continue;
+        }
+      }
     }
 
-    // `ids: [ID!]` -> an `in` match against the singular `id` field. One character of
-    // tolerance, on an established convention; nothing looser than this.
-    if (Array.isArray(value) && argName.endsWith('s')) {
-      const singular = argName.slice(0, -1);
-      const target = comparable.get(singular);
-      if (target) equality.push({ field: singular, values: value, coerce: target.isId });
-    }
+    // Nothing interpreted this argument. If it is a single scalar or enum, it still says the
+    // caller meant *these* rows rather than those, so it becomes a partition key.
+    if (config.partition && isPartitionValue(value)) partitions.push(`${argName}=${value}`);
   }
 
   const hasFilters = equality.length > 0 || contains.length > 0;
-  if (!hasFilters && !hasPaging) return null;
-  return { equality, contains, page, hasFilters, hasPaging };
+  // Sorted so argument order in the document can't change which window a value draws.
+  const partitionKey = partitions.sort().join('&');
+  if (!hasFilters && !hasPaging && partitionKey === '') return null;
+  return { equality, contains, page, hasFilters, hasPaging, partitionKey };
+}
+
+/** Values that can stand for a partition: a single scalar or enum, not a structure. */
+function isPartitionValue(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+/** FNV-1a over the key. Any stable, well-spread string hash would do; this one is short. */
+function hashKey(key: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * The slice of `items` a partition key draws: a rotation by a hash of the key, then `length`
+ * items from there, wrapping.
+ *
+ * Rotating rather than hashing each item keeps every item reachable and keeps the result
+ * contiguous, so a paged or ordered pool still reads as a page. Two different keys land on
+ * different offsets; the same key always lands on the same one, so a re-render doesn't reshuffle
+ * the panel.
+ */
+export function partitionWindow<T>(items: readonly T[], key: string, length: number): T[] {
+  if (items.length === 0 || length <= 0) return [];
+  const offset = hashKey(key) % items.length;
+  const size = Math.min(length, items.length);
+  const window: T[] = [];
+  for (let i = 0; i < size; i++) window.push(items[(offset + i) % items.length] as T);
+  return window;
 }
 
 function matchesEquality(item: Record<string, unknown>, match: EqualityMatch): boolean {

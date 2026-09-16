@@ -4,6 +4,9 @@ import { activeArgNames, applyArgPlan, buildArgPlan, resolveArgMatching } from '
 import { schema } from './test/schema.js';
 
 const config = resolveArgMatching(true);
+// Partitioning turns any leftover scalar argument into a plan of its own, so the tests that
+// assert "nothing was interpreted" opt out of it and the partition tests assert it directly.
+const noPartition = resolveArgMatching({ partition: false });
 const queryType = schema.getQueryType();
 if (!queryType) throw new Error('test schema has no Query type');
 const queryFields = queryType.getFields();
@@ -184,7 +187,7 @@ describe('buildArgPlan', () => {
   it('ignores paging arguments on a singular field', () => {
     const args = { limit: 2 };
     expect(
-      buildArgPlan(queryFields.user, userType, false, args, allActive(args), config),
+      buildArgPlan(queryFields.user, userType, false, args, allActive(args), noPartition),
     ).toBeNull();
   });
 
@@ -199,7 +202,7 @@ describe('buildArgPlan', () => {
   it('ignores an argument that names no field on the return type', () => {
     const args = { nonsense: 'x' };
     expect(
-      buildArgPlan(queryFields.users, userType, true, args, allActive(args), config),
+      buildArgPlan(queryFields.users, userType, true, args, allActive(args), noPartition),
     ).toBeNull();
   });
 
@@ -220,7 +223,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled equality dimension', () => {
     const args = { id: 'u-1' };
-    const noEquality = resolveArgMatching({ equality: false });
+    const noEquality = resolveArgMatching({ equality: false, partition: false });
     expect(
       buildArgPlan(queryFields.user, userType, false, args, allActive(args), noEquality),
     ).toBeNull();
@@ -228,7 +231,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled paging dimension', () => {
     const args = { skip: 1, limit: 2 };
-    const noPaging = resolveArgMatching({ paging: false });
+    const noPaging = resolveArgMatching({ paging: false, partition: false });
     expect(
       buildArgPlan(queryFields.users, userType, true, args, allActive(args), noPaging),
     ).toBeNull();
@@ -236,7 +239,7 @@ describe('buildArgPlan', () => {
 
   it('honors a disabled search dimension', () => {
     const args = { search: 'x' };
-    const noSearch = resolveArgMatching({ search: false });
+    const noSearch = resolveArgMatching({ search: false, partition: false });
     expect(
       buildArgPlan(queryFields.users, userType, true, args, allActive(args), noSearch),
     ).toBeNull();
@@ -255,7 +258,14 @@ describe('buildArgPlan', () => {
     if (!booleanType) throw new Error('missing Boolean');
     const args = { id: 'x' };
     expect(
-      buildArgPlan(mutationFields.deleteTodo, booleanType, false, args, allActive(args), config),
+      buildArgPlan(
+        mutationFields.deleteTodo,
+        booleanType,
+        false,
+        args,
+        allActive(args),
+        noPartition,
+      ),
     ).toBeNull();
   });
 });
@@ -274,6 +284,7 @@ describe('applyArgPlan', () => {
       page: {},
       hasFilters: false,
       hasPaging: false,
+      partitionKey: '',
     };
   }
 
