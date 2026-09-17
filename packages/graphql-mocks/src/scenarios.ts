@@ -28,7 +28,8 @@ function mergeQa(base: QaOption | undefined, next: QaOption): QaOption | undefin
 }
 
 /**
- * Merge a two-level map (`overrides`, `derive`, `relations`, `countFields`) — per type, then per
+ * Merge a two-level map (`overrides`, `derive`, `relations`, `countFields`, `aliases`) — per
+ * type, then per
  * field. Reserved keys (`_default`, `_reciprocal`), the flat forms and the boolean form of
  * `countFields` carry no per-field structure, so they assign.
  */
@@ -91,6 +92,7 @@ export function mergeScenarios(layers: readonly (Scenario | BuildMocksOptions)[]
           merged.scalars = { ...(merged.scalars as Layer), ...(value as Layer) };
           scalarsAt = index;
           break;
+        case 'aliases':
         case 'countFields':
         case 'derive':
         case 'overrides':

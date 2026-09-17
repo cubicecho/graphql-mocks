@@ -4,6 +4,7 @@ import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js'
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
+  AliasesConfig,
   ArgOverride,
   BuildMocksOptions,
   CountConfig,
@@ -53,6 +54,8 @@ export interface ResolvedOptions {
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
+  /** Extra names to expose fields under, applied after everything else has run. */
+  aliases: AliasesConfig | undefined;
   /** Field functions run after the graph is complete, so they see the finished object. */
   derive: DeriveConfig | undefined;
   /**
@@ -88,6 +91,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    aliases: options.aliases,
     derive: options.derive,
     countFields: options.countFields,
     relations: options.relations,
