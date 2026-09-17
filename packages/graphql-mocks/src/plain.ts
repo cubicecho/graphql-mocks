@@ -1,3 +1,4 @@
+import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import {
   type DocumentNode,
   type FragmentDefinitionNode,
@@ -71,8 +72,13 @@ function stubOf(value: Record<string, unknown>): unknown {
  * Two objects that merely appear twice are both copied in full; only a genuine cycle — the same
  * object open on the current path — is cut. Non-plain values (`Date`, class instances) and
  * functions are carried over by reference rather than copied.
+ *
+ * The result is typed as the input, which is what the ordinary copy is. Where a cut actually
+ * fires the shape narrows below that — a cycle becomes a `{ __typename, id }` stub, `null`, or
+ * a dropped property — so a value you intend to cut deeply (`maxDepth`, `onCycle`) is worth
+ * widening yourself.
  */
-export function toPlain<T>(value: T, options: ToPlainOptions = {}): unknown {
+export function toPlain<T>(value: T, options: ToPlainOptions = {}): T {
   const onCycle = options.onCycle ?? 'stub';
   const maxDepth = options.maxDepth ?? Number.POSITIVE_INFINITY;
   // The *path*, not every object seen: a shared object that isn't an ancestor is not a cycle.
@@ -111,7 +117,7 @@ export function toPlain<T>(value: T, options: ToPlainOptions = {}): unknown {
     return result;
   };
 
-  return copy(value, 0);
+  return copy(value, 0) as T;
 }
 
 export interface SelectOptions {
@@ -173,10 +179,13 @@ function conditionMatches(
  * ```
  *
  * `@skip` / `@include` directives are not evaluated — the field is taken as written.
+ *
+ * With a `TypedDocumentNode` the return type is inferred from the document, the same way
+ * `dataForOperation` infers it; a plain `DocumentNode` leaves it `unknown` unless you say.
  */
-export function select<TData = unknown>(
+export function select<TData = unknown, TVars = Record<string, unknown>>(
   value: unknown,
-  document: DocumentNode,
+  document: TypedDocumentNode<TData, TVars> | DocumentNode,
   options: SelectOptions = {},
 ): TData {
   const fragments = new Map<string, FragmentDefinitionNode>();
