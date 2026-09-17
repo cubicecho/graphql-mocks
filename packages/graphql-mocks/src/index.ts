@@ -14,6 +14,7 @@ export { paginate, searchItems } from './collection.js';
 export type { PageArgs, SearchField } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
+  AliasesConfig,
   ArgOverride,
   ArgOverrideContext,
   ArgOverrideData,

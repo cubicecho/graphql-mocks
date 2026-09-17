@@ -8,6 +8,7 @@ import {
   isScalarType,
   isUnionType,
 } from 'graphql';
+import { applyAliases, validateAliases } from './aliases.js';
 import {
   type MockOperationOptions,
   mockOperation as buildMockOperation,
@@ -456,6 +457,7 @@ function applyDerive(
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
+  validateAliases(schema, resolved.aliases);
   const { faker, qa, nullChance } = resolved;
 
   // Collect all non-operation, non-builtin object types
@@ -573,6 +575,9 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
   // names a count field wins over phase 4's inference — it was written, the other was guessed.
   applyDerive(objectTypes, pool, resolved);
+
+  // Phase 6: expose aliased fields under their alias names, once the values are final.
+  applyAliases(objectTypes, pool, resolved.aliases);
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }

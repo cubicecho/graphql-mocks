@@ -150,6 +150,32 @@ The second argument is `{ index, typeName, fieldName, faker }`, with the same se
 
 Merging follows the same two-level rule as `overrides`: a scenario layer and the build options combine per type and per field.
 
+### Aliased fields
+
+A fragment that aliases a field produces a result type whose keys the pooled objects don't have:
+
+```graphql
+fragment UserCard on User {
+  id
+  locations: addresses { city }
+}
+```
+
+The pool has `addresses`; `UserCardFragment` has `locations`. A component typed by that fragment reads `locations`, gets `undefined` and renders an empty section — with no type error anywhere to say why. `aliases` declares the copy once:
+
+```ts
+const mocks = buildMocks(schema, {
+  aliases: {
+    User: { addresses: 'locations' },
+    Post: { comments: ['replies', 'discussion'] },  // several names for one field
+  },
+});
+```
+
+The key is the field the schema has, the value is the name (or names) to expose it under. The alias holds **the same reference**, not a clone, so identity comparisons and the wired graph keep working through it. It's applied last — after relationships, counts and derives — so an alias always carries the finished value, and it works on scalars as readily as on relationships.
+
+Config errors throw before anything is generated: an unknown type or field, a non-object or operation type (root fields have no pooled instances — alias what the field returns instead), or an alias that would land on a field the type really has. Merging is the same two-level rule as `overrides`.
+
 ### `__typename` and stable ids
 
 Every object gets a `__typename` by default (the Apollo cache needs it). Turn it off with `addTypename: false`. Enable `stableIds` to give each object with an `id` field a readable, collision-free `TypeName-<index>` id instead of a random scalar:
@@ -1139,6 +1165,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
 | `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
 | `fieldOverrides` | `Record<field, (faker, ctx) => unknown>` | — | [Overrides keyed by field name](#by-field-name-fieldoverrides), applied to every type carrying it. A key wrapped in slashes is a pattern; a type-keyed `overrides` entry wins |
+| `aliases` | `Record<type, Record<field, string \| string[]>>` | — | [Expose a field under extra names](#aliased-fields), for fragments that alias it. Same reference, applied last |
 | `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |

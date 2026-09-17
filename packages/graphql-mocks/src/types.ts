@@ -101,6 +101,16 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
  */
 export type FieldOverridesConfig = Record<string, FieldOverrideFn>;
 
+/**
+ * Expose a field under one or more extra names, per type: `{ User: { addresses: 'locations' } }`
+ * reads as "on every `User`, also expose `addresses` as `locations`".
+ *
+ * The key is the field the schema has; the value is the name (or names) to expose it under.
+ */
+export type AliasesConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: Record<string, string | readonly string[]>;
+};
+
 /** Where a derive is firing, plus the tools the function may need. */
 export interface DeriveContext {
   /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
@@ -435,6 +445,23 @@ export interface BuildMocksOptions<
    * names you cannot retype, which in a stitched or generated schema is most of them.
    */
   fieldOverrides?: FieldOverridesConfig;
+  /**
+   * Also expose a field under the name a fragment aliases it to:
+   *
+   * ```ts
+   * // fragment UserCard on User { id, locations: addresses { city } }
+   * buildMocks(schema, { aliases: { User: { addresses: 'locations' } } });
+   * ```
+   *
+   * A component typed by that fragment reads `locations`, which a pooled `User` does not have —
+   * so it renders an empty section, with no type error anywhere to say why. The alias holds the
+   * same reference as the field it mirrors, not a clone, so identity comparisons and the wired
+   * graph keep working through it.
+   *
+   * Applied last, after relationships, counts and derives, so an alias carries the finished
+   * value. An unknown type or field, or an alias that collides with a real field, throws.
+   */
+  aliases?: AliasesConfig<TTypes>;
   /**
    * Shape relationship fields: how many related objects each one gets, or exactly which ones.
    * Applied after every pool exists, which is what `overrides` structurally cannot do.

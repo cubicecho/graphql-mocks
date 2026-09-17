@@ -28,7 +28,8 @@ function mergeQa(base: QaOption | undefined, next: QaOption): QaOption | undefin
 }
 
 /**
- * Merge a two-level map (`overrides`, `derive`, `relations`, `countFields`) — per type, then per
+ * Merge a two-level map (`overrides`, `derive`, `relations`, `countFields`, `aliases`) — per
+ * type, then per
  * field. Reserved keys (`_default`, `_reciprocal`), the flat forms and the boolean form of
  * `countFields` carry no per-field structure, so they assign.
  */
@@ -97,6 +98,7 @@ export function mergeScenarios<TTypes extends Record<string, unknown> = Record<s
         case 'fieldOverrides':
           merged.fieldOverrides = { ...(merged.fieldOverrides as Layer), ...(value as Layer) };
           break;
+        case 'aliases':
         case 'countFields':
         case 'derive':
         case 'overrides':
