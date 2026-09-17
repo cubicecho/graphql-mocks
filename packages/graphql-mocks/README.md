@@ -366,7 +366,7 @@ buildMocks(schema, {
 });
 ```
 
-A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page. `countFields` makes them reflect something a pager can actually page through.
+A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page. `countFields` makes them reflect something a pager can actually page through, and keeps them in step when an argument narrows the list.
 
 ### Counts that agree with their lists
 
@@ -393,6 +393,17 @@ buildMocks(schema, { countFields: { ProductSearchResult: { hitTotal: 'results' }
 ```
 
 An explicit `relations` size still decides the list's length, an `overrides` entry for a count is never touched, and a `derive` for the same field still wins — it runs after. Under a QA `lists` profile the profile owns the sizing and this only syncs the counts, so an emptied list reports zero; `countFields: false` turns the pass off either way.
+
+A paired count follows the narrowing, so a filtered list doesn't report the unfiltered pool:
+
+```ts
+// search: matched 2 of 40                    limit alone: page 1 of 40
+{ results: [ /* 2 */ ], totalCount: 2 }       { results: [ /* 10 */ ], totalCount: 40 }
+```
+
+The count is what the filters left, before paging — the same number a Relay `pageInfo` is built from. Paging alone leaves it at the pool size, which is what a pager pages through. Only the pairing does this: with `countFields` off, a count scalar is ordinary generated data that happens to be an `Int`, and nothing says it was ever about that list.
+
+This reaches the count on a *wrapper* type, next to the list the arguments narrowed. A count sitting beside a plain list field (`user { posts(search: "x") { id } postCount }`) is resolved from the wired object and still reports what was wired.
 
 ### Selections that differ only by an argument
 
@@ -475,10 +486,12 @@ import { assertValidMocks, validateMocks } from '@vantreeseba/graphql-mocks';
 it('every mock is well formed', () => assertValidMocks(mocks));
 
 const issues = validateMocks(mocks);
-// [{ path: 'mocks.userMock.result.data', operationName: 'User', message: 'result.data is a function, …' }]
+// [{ kind: 'invalid', path: 'mocks.userMock.result.data', operationName: 'User', message: 'result.data is a function, …' }]
 ```
 
 It reports every problem rather than stopping at the first, so one run fixes a directory. Checks: `request.query` is a parsed document declaring an operation, `request.variables` is an object or a predicate, `error` is an `Error`, `delay`/`maxUsageCount` are numbers, the mock carries a `result` or an `error`, and the resolved `data` is a non-empty object with no functions anywhere inside it. Both walks — the one that finds the mocks and the one that inspects their `data` — are cycle-safe, so a module can export a built pool alongside the mocks built from it. Pass `requireData: false` to allow empty payloads, or `probeVariables` to call a resolver-form `result` and validate what it returns.
+
+Finding *nothing* is reported too, as the single issue `kind: 'empty'` — a module that quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine. Every other issue carries `kind: 'invalid'`, so a fixture module that legitimately holds no mocks can filter the empty report out without matching on message text. The keyed map `mockOperationsFrom` returns is walked like any other module, to the same depth; its entries are lazy, so validating one forces every operation in it. That is what validation is for, but it is the opposite of what the map is optimised for — keep the check in a test rather than in the module itself.
 
 ## A transport for any operation
 
@@ -691,14 +704,16 @@ copying. `onCycle` says what the cut looks like — `'stub'` (the default) leave
 `{ __typename, id }`, `'null'` leaves `null`, `'omit'` drops the property (array *entries* still
 become `null`, since dropping one would shift the indices after it). `maxDepth` cuts at a fixed
 depth with the same strategy. An object that merely appears twice is copied twice; only a real
-cycle is cut.
+cycle is cut. The result is typed as the input — true of the ordinary copy, though a cut narrows
+the shape below that, so widen it yourself when you cut deliberately.
 
 `select(value, document, options?)` projects onto a query, mutation or bare fragment document:
 the fields it asks for, under the aliases it asks for them, and nothing else. Because the shape
 follows the document rather than the object graph, the result is cycle-free by construction —
 which is usually what you wanted anyway. Pass `{ schema }` when a fragment's type condition is an
 interface or union, and `{ operationName }` to pick between operations. `@skip` / `@include` are
-not evaluated.
+not evaluated. Hand it a `TypedDocumentNode` and the return type comes from the document, the
+same way `dataForOperation` infers it.
 
 There is also `relations: { _reciprocal: 'hidden' }`, which wires the mirrored back-references as
 **non-enumerable** properties: `todo.user` still reads normally, but `JSON.stringify` and
@@ -726,11 +741,24 @@ The same primitives the argument engine uses, exported for the cases it can't re
 import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
 
 paginate(mocks.User, { skip: 10, limit: 5 });  // also offset/first/take
-searchItems(mocks.User, 'ana');                // every string field
+searchItems(mocks.User, 'ana');                // every own string field
 searchItems(mocks.User, 'ana', ['name']);      // named fields only
 ```
 
 Absent or null arguments are no-ops, so they're safe to apply unconditionally.
+
+A `searchItems` field is a key, a **dotted path**, or an accessor. Because relations are wired
+into the pool, a path reaches them — and steps through a list on the way, so a post matches when
+any of its comments does:
+
+```ts
+searchItems(mocks.Post, 'ana', ['title', 'author.name', 'comments.text']);
+searchItems(mocks.Post, 'ana', [(post) => post.author?.email]);
+```
+
+A missing link is a non-match, not a throw, so `author.email` is safe on posts with no author.
+Leaving `fields` off keeps the shallow default — every own string-valued property, relations not
+followed — so name the paths when a related object is what you're filtering on.
 
 ## QA mode
 
@@ -806,7 +834,9 @@ For a single story, the [decorator](#the-storybook-decorator) takes a profile di
 
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
-just that preset gives you the same data back.
+just that preset gives you the same data back. That holds even when you hand it the same options
+object you hand `buildMocks`: a `faker` in there contributes its locale data and is never drawn
+from or re-seeded, so there is nothing to strip out first.
 
 ### Count fields stay in step with their lists
 
@@ -873,7 +903,7 @@ const mocks = buildMocks(schema, {
 ```
 
 A spec is a number, a `{ min, max }` range, `null` (empty the field), `'all'` (the whole target
-pool), or a function that picks the value outright:
+pool), a `{ size, where }` filter (below), or a function that picks the value outright:
 
 ```ts
 relations: { User: { todos: ({ pool, index }) => pool.filter((t) => t.ownerIndex === index) } }
@@ -881,6 +911,40 @@ relations: { User: { todos: ({ pool, index }) => pool.filter((t) => t.ownerIndex
 
 The function receives `{ pool, faker, index, instance, typeName, fieldName, isList }`, where
 `pool` is the *target* type's pool and `instance` is the owner as built so far.
+
+#### Drawing from part of the pool: `{ size, where }`
+
+A function is the sledgehammer — it has to re-implement the sizing along with the picking. When
+all you want is to *narrow which* objects the field may draw from, give the spec a `where`
+predicate and let the usual sizing do the rest:
+
+```ts
+const mocks = buildMocks(schema, {
+  relations: {
+    Team: { members: { size: { min: 2, max: 4 }, where: (user) => user.isActive === true } },
+    Post: { author: { where: (user) => user.role === 'AUTHOR' } },   // size left to the default
+  },
+});
+```
+
+`where` is called as `(item, ctx)` with the same `ctx` a relation function gets, and anything
+truthy keeps the object. `size` is an ordinary spec — a number, a range, `'all'` or `null` — and
+when it's absent the field is sized exactly as it would have been with no entry at all. Pools
+still grow to meet a `size`, since the filtered draw comes out of the same pool.
+
+- **A `where` that matches nothing throws.** An empty match is nearly always a predicate that
+  doesn't say what its author meant, and wiring `null` for it hands the mistake back much later
+  as an unexplained missing relationship. Where "none" is a legitimate answer, say so with a
+  relation function.
+- **A singular field cycles by the owner's index** (`candidates[index % candidates.length]`)
+  rather than drawing at random, so each owner's assignment is stable across a rebuild and
+  spread across the candidates instead of clustering on one.
+- **On a root field, `where` narrows the pool** rather than picking from it: argument matching,
+  paging and the random pick all then run against the objects the predicate kept. So
+  `relations: { Query: { users: { where: (u) => u.isActive === true } } }` makes the whole
+  `users` field serve active users only, and `users(isActive: false)` matches nothing.
+- An object is only a filter when its `where` is a function; `{ where: 'active' }` is a
+  `TypeError` rather than a range with no bounds.
 
 Lookup goes most specific first: `[type][field]` → `[type]._default` → `_default` → the flat
 top-level form (`relations: 0` empties every relationship in the graph). **Ranges live under a
@@ -906,8 +970,10 @@ Notes:
 ### Named scenarios
 
 A scenario is a named partial `buildMocks` config. `defineScenarios` is an identity function that
-keeps the literal keys; `satisfies ScenarioMap<SchemaTypeMap>` adds schema-checked type and field
-names.
+keeps the literal keys. To check type and field names against a schema too, bind it to a type map
+first — `defineScenarios<SchemaTypeMap>()({ … })` — or write the same check the other way round
+with `satisfies ScenarioMap<SchemaTypeMap>`. The currying is what keeps both halves: TypeScript
+can't infer the scenario map while you supply the type map by hand.
 
 ```ts
 import { buildMocks, defineScenarios } from '@vantreeseba/graphql-mocks';
@@ -934,7 +1000,10 @@ buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], count: 3,
 ```
 
 `composeScenarios(a, b)` does the same fold eagerly and hands back an ordinary scenario, so it can
-be composed further. Maps merge key by key — `count` per type, `overrides` and `relations` per
+be composed further. `composeScenarios<SchemaTypeMap>(a, b)` checks every piece against that map
+and stays bound to it, so a scenario written for another schema can't quietly join the fold; the
+map is never inferred from the arguments, since inferring it from the first scenario would make
+every later one conform to whatever types that one happened to mention. Maps merge key by key — `count` per type, `overrides` and `relations` per
 type then per field, `scalars` by scalar name, `qa` per dimension — and everything else is
 last-one-wins. `faker` and `seed` are build-level only; reproducibility stays the caller's.
 
@@ -966,7 +1035,8 @@ export const Variants = cells.map((cell) => ({
 Either axis may be omitted; `qaPresets` also takes a map (`{ baseline: false, huge: { lists:
 'huge' } }`) when you want your own cell names. Each cell gets its own faker seeded from `seed`,
 so a cell reproduces identically no matter which other cells were requested — `seedPerCell: true`
-opts out when you'd rather the cells differ. With `stableIds`, each cell's ids are prefixed with a
+opts out when you'd rather the cells differ. A `faker` you pass contributes its locale data only;
+it is never drawn from or re-seeded, so reproducibility rests on `seed`. With `stableIds`, each cell's ids are prefixed with a
 slug of its name so pools from different cells don't collide; set `idPrefix` yourself to override.
 
 `buildQaSets` is the QA-only shorthand for the same engine.
@@ -1076,7 +1146,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
 | `listSize` | `number \| { min: number, max: number }` | `{ min: 1, max: 5 }` | How many items generated list fields hold, unless a QA `lists` profile or a `relations` entry says otherwise |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
-| `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
+| `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, a `{ size, where }` filter, or a function picking the related objects |
 | `countFields` | `boolean \| { [type]: { [countField]: listField } }` | — | [Pair count scalars with the lists they count](#counts-that-agree-with-their-lists) and size those lists to the pool. A map adds the pairings the name convention misses, and turns the pass on |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |
