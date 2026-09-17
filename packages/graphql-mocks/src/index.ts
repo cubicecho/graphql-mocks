@@ -10,8 +10,15 @@ export type {
   VariableMatcher,
 } from './apolloMocks.js';
 export { buildMocks } from './mockSchema.js';
-export { paginate, searchItems } from './collection.js';
-export type { PageArgs, SearchField } from './collection.js';
+export {
+  DEFAULT_LIMIT_ARGS,
+  DEFAULT_OFFSET_ARGS,
+  DEFAULT_SEARCH_ARGS,
+  paginate,
+  paginateArgs,
+  searchItems,
+} from './collection.js';
+export type { PageArgs, PaginateArgsOptions, PaginatedArgs, SearchField } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
   AliasesConfig,

@@ -6,6 +6,7 @@ import type {
   DeriveContext,
   FieldDeriveFn,
   OverridesConfig,
+  PaginateArgsOptions,
 } from './index.js';
 
 // The public surface has no other guardrail — index.ts is excluded from coverage and nothing
@@ -13,6 +14,9 @@ import type {
 // makes a new export public; removing one is a breaking change.
 const EXPORTS = [
   'DEFAULT_HUGE_LIST_SIZE',
+  'DEFAULT_LIMIT_ARGS',
+  'DEFAULT_OFFSET_ARGS',
+  'DEFAULT_SEARCH_ARGS',
   'QA_PROFILES',
   'QA_PROFILE_NAMES',
   'assertValidMocks',
@@ -27,6 +31,7 @@ const EXPORTS = [
   'mockOperationVariants',
   'mockScenarios',
   'paginate',
+  'paginateArgs',
   'qaScalarMockers',
   'resolveRelation',
   'resolveScalarMocker',
@@ -46,6 +51,7 @@ const derive: DeriveConfig = {
 };
 const fullName: FieldDeriveFn = (self) => String(self.firstName);
 const overrides: OverridesConfig = { User: { firstName: () => 'Ada' } };
+const paginateOptions: PaginateArgsOptions = { searchFields: ['title'], defaultLimit: 10 };
 
 describe('index', () => {
   it('exports exactly the documented runtime surface', () => {
@@ -63,5 +69,6 @@ describe('index', () => {
     expect(Object.keys(derive)).toEqual(['User']);
     expect(typeof fullName).toBe('function');
     expect(Object.keys(overrides)).toEqual(['User']);
+    expect(paginateOptions.defaultLimit).toBe(10);
   });
 });

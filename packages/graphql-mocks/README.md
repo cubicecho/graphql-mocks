@@ -786,6 +786,46 @@ A missing link is a non-match, not a throw, so `author.email` is safe on posts w
 Leaving `fields` off keeps the shallow default — every own string-valued property, relations not
 followed — so name the paths when a related object is what you're filtering on.
 
+### `paginateArgs`: the same thing from a field's arguments
+
+In an `argOverrides` handler the values arrive as untyped args, and `paginate`/`searchItems` take
+already-coerced ones — so every handler writes the same preamble, and it's subtly easy to get
+wrong (a `limit` defaulting to `0` empties the list; a `skip` defaulting to `undefined` pages
+differently from one defaulting to `0`). `paginateArgs` closes over the arg-reading:
+
+```ts
+import { paginateArgs } from '@vantreeseba/graphql-mocks';
+
+argOverrides: [
+  {
+    match: { type: 'Query', field: 'searchPosts' },
+    data: (ctx) => {
+      const { items, matchedCount } = paginateArgs(ctx.pool, ctx, { searchFields: ['title'] });
+      return { results: items, totalCount: matchedCount };
+    },
+  },
+];
+```
+
+It returns `{ items, matchedCount, totalCount, skip, limit, search }` — the page, how many the
+search left, how many there were to begin with, and the values it actually used — so the caller
+shapes its own envelope.
+
+The argument names are the ones the argument matcher reads, exported as `DEFAULT_OFFSET_ARGS`
+(`skip`, `offset`), `DEFAULT_LIMIT_ARGS` (`limit`, `first`, `take`) and `DEFAULT_SEARCH_ARGS`
+(`search`, `query`, `q`, `filter`, `searchTerm`, `term`), so a hand-written handler and the engine
+stay in step rather than each guessing at the same list. Override them — plus `searchFields`, a
+`defaultLimit` for a field whose arguments carry no page size, and `flattenInputs` — per call:
+
+```ts
+paginateArgs(ctx.pool, ctx, { limitArgs: ['pageSize'], defaultLimit: 25 });
+```
+
+Arguments one level inside an input object are found too (`where: { search: "ada" }`), matching
+the matcher's default, with a top-level name beating a nested one. A null or wrongly typed
+argument reads as absent, and with no page size at all the result is unpaged rather than empty.
+It takes the override context, or any `{ args }` object.
+
 ## QA mode
 
 Mocks are realistic by default, and realistic data never finds the bug where a 400-character

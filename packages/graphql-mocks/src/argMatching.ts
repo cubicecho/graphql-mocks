@@ -10,7 +10,14 @@ import {
   isScalarType,
   isUnionType,
 } from 'graphql';
-import { type PageArgs, paginate, searchItems } from './collection.js';
+import {
+  DEFAULT_LIMIT_ARGS,
+  DEFAULT_OFFSET_ARGS,
+  DEFAULT_SEARCH_ARGS,
+  type PageArgs,
+  paginate,
+  searchItems,
+} from './collection.js';
 import { unwrapType } from './typeMocker.js';
 
 /** What to do when a filter matches nothing. */
@@ -122,10 +129,6 @@ export interface ResolvedArgMatching {
   unwrap: boolean;
   listPath: string | Record<string, string> | undefined;
 }
-
-const DEFAULT_OFFSET_ARGS = ['skip', 'offset'] as const;
-const DEFAULT_LIMIT_ARGS = ['limit', 'first', 'take'] as const;
-const DEFAULT_SEARCH_ARGS = ['search', 'query', 'q', 'filter', 'searchTerm', 'term'] as const;
 
 /** Normalize `matchArguments` into a fully-populated config. Disabled unless explicitly on. */
 export function resolveArgMatching(
