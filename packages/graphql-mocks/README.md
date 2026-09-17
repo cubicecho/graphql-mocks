@@ -437,10 +437,12 @@ import { assertValidMocks, validateMocks } from '@vantreeseba/graphql-mocks';
 it('every mock is well formed', () => assertValidMocks(mocks));
 
 const issues = validateMocks(mocks);
-// [{ path: 'mocks.userMock.result.data', operationName: 'User', message: 'result.data is a function, …' }]
+// [{ kind: 'invalid', path: 'mocks.userMock.result.data', operationName: 'User', message: 'result.data is a function, …' }]
 ```
 
 It reports every problem rather than stopping at the first, so one run fixes a directory. Checks: `request.query` is a parsed document declaring an operation, `request.variables` is an object or a predicate, `error` is an `Error`, `delay`/`maxUsageCount` are numbers, the mock carries a `result` or an `error`, and the resolved `data` is a non-empty object with no functions anywhere inside it. Both walks — the one that finds the mocks and the one that inspects their `data` — are cycle-safe, so a module can export a built pool alongside the mocks built from it. Pass `requireData: false` to allow empty payloads, or `probeVariables` to call a resolver-form `result` and validate what it returns.
+
+Finding *nothing* is reported too, as the single issue `kind: 'empty'` — a module that quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine. Every other issue carries `kind: 'invalid'`, so a fixture module that legitimately holds no mocks can filter the empty report out without matching on message text. The keyed map `mockOperationsFrom` returns is walked like any other module, to the same depth; its entries are lazy, so validating one forces every operation in it. That is what validation is for, but it is the opposite of what the map is optimised for — keep the check in a test rather than in the module itself.
 
 ## A transport for any operation
 
