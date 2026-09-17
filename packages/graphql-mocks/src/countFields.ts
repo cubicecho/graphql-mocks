@@ -1,4 +1,10 @@
-import { type GraphQLObjectType, isEnumType, isScalarType } from 'graphql';
+import {
+  type GraphQLNamedType,
+  type GraphQLObjectType,
+  isEnumType,
+  isObjectType,
+  isScalarType,
+} from 'graphql';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { unwrapType } from './typeMocker.js';
 
@@ -235,6 +241,38 @@ export function countedListFields(
   const overrides = resolved.overrides[objectType.name] ?? {};
   const pairs = pairCountFields(objectType, sync, overrides, false);
   return new Set(pairs.map(([, listField]) => listField));
+}
+
+/**
+ * The count fields of a wrapper type that count `listField`, rewritten to `length` — the patch
+ * to spread over a wrapper whose list an operation's arguments have just narrowed.
+ *
+ * Phase 4 synced these counts against the *pooled* list, which holds the whole pool. That is
+ * still the right answer for a paged query — `totalCount` is what the pager pages through, not
+ * how many rows this page happens to carry — but a filter changes what is being totalled, and
+ * a count left at the pool size renders two matched rows under a "40 results" pager. Callers
+ * therefore pass the length *before* paging, which is the same number `pageInfo` is built from.
+ *
+ * Empty unless the build asked for count syncing at all: with it off, a count scalar is ordinary
+ * generated data that happens to be an `Int`, and nothing says it was ever about that list.
+ */
+export function countsForList(
+  objectType: GraphQLNamedType,
+  listField: string,
+  length: number,
+  resolved: ResolvedOptions,
+): Record<string, number> {
+  if (!isObjectType(objectType)) return {};
+  const sync = resolveCountSync(resolved);
+  if (!sync) return {};
+
+  const patch: Record<string, number> = {};
+  // Silent: phase 4 already walked these same pairings and warned about the ambiguous ones.
+  const pairs = pairCountFields(objectType, sync, resolved.overrides[objectType.name] ?? {}, false);
+  for (const [countField, paired] of pairs) {
+    if (paired === listField) patch[countField] = length;
+  }
+  return patch;
 }
 
 /**

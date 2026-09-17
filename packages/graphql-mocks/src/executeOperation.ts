@@ -34,6 +34,7 @@ import {
   resolveListTarget,
 } from './argMatching.js';
 import { paginate } from './collection.js';
+import { countsForList } from './countFields.js';
 import { qaFallbackText, qaListLength } from './qa.js';
 import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
@@ -294,15 +295,19 @@ function unwrapListArgs(
       ? filtered.slice(0, wired.length)
       : filtered;
   const paged = plan.hasPaging ? paginate(windowed, plan.page) : windowed;
+  // What a paired `totalCount` is now a total *of*: the rows the filters left, before paging.
+  // Paging alone leaves it at the pool size, which is what a pager pages through.
+  const counts = countsForList(named, target.fieldName, windowed.length, ctx.resolved);
 
   if (target.edgeTypeName === undefined) {
-    return { ...wrapper, [target.fieldName]: paged };
+    return { ...wrapper, [target.fieldName]: paged, ...counts };
   }
   const edges = buildEdges(ctx, target.edgeTypeName, paged);
   const pageInfo = syncPageInfo(wrapper, edges, skip, windowed.length);
   return {
     ...wrapper,
     [target.fieldName]: edges,
+    ...counts,
     ...(pageInfo ? { pageInfo } : {}),
   };
 }
