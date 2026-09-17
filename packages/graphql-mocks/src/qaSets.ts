@@ -39,11 +39,11 @@ export interface BuildQaSetsOptions<
  * }));
  * ```
  *
- * Unless you pass your own `faker`, each set is generated from its **own** Faker instance
- * seeded with `seed`, so a set reproduces identically no matter which other profiles were
- * requested alongside it — drop one from `profiles` and the rest are unchanged. Sharing a
- * single instance (by passing `faker`) gives up that property, because every draw advances
- * the same stream.
+ * Each set is generated from its **own** Faker instance seeded with `seed`, so a set reproduces
+ * identically no matter which other profiles were requested alongside it — drop one from
+ * `profiles` and the rest are unchanged. That holds whether or not the options carry a `faker`:
+ * one passed in contributes its locale data and is never drawn from or re-seeded, so the same
+ * options object you hand `buildMocks` can come straight here without stripping anything out.
  *
  * A thin wrapper over {@link buildMatrix}' QA axis — reach for that one when you also want
  * a scenario axis.
