@@ -86,4 +86,62 @@ describe('searchItems', () => {
   it('ignores field names the item does not have', () => {
     expect(searchItems(users, 'ann', ['nope'])).toEqual([]);
   });
+
+  describe('nested fields', () => {
+    interface Post {
+      title: string;
+      tags: string[];
+      author?: { name: string; email?: string } | null;
+      comments?: { text: string }[];
+    }
+
+    const posts: Post[] = [
+      {
+        title: 'Release notes',
+        tags: ['news'],
+        author: { name: 'Ann Lee', email: 'ann@example.com' },
+        comments: [{ text: 'nice' }, { text: 'thanks Ann' }],
+      },
+      { title: 'Roadmap', tags: ['planning', 'announcement'], author: { name: 'Bob Ray' } },
+      { title: 'Postmortem', tags: [], author: null },
+    ];
+
+    const titles = (result: Post[]) => result.map((post) => post.title);
+
+    it('follows a dotted path through a related object', () => {
+      expect(titles(searchItems(posts, 'ann', ['author.name']))).toEqual(['Release notes']);
+    });
+
+    it('searches several paths at once', () => {
+      expect(titles(searchItems(posts, 'ray', ['title', 'author.name']))).toEqual(['Roadmap']);
+    });
+
+    it('steps through a list on the way, matching if any entry does', () => {
+      expect(titles(searchItems(posts, 'thanks', ['comments.text']))).toEqual(['Release notes']);
+    });
+
+    it('searches the entries of a string list', () => {
+      expect(titles(searchItems(posts, 'announce', ['tags']))).toEqual(['Roadmap']);
+    });
+
+    it('treats a missing link as a non-match rather than throwing', () => {
+      // `author` is null on one post and `author.email` absent on another: neither may throw.
+      expect(titles(searchItems(posts, 'example.com', ['author.email']))).toEqual([
+        'Release notes',
+      ]);
+    });
+
+    it('stops at a path that runs through a non-object', () => {
+      expect(searchItems(posts, 'release', ['title.length'])).toEqual([]);
+    });
+
+    it('takes an accessor for anything a path cannot express', () => {
+      const result = searchItems(posts, 'ANN', [(post) => post.author?.email?.split('@')[0]]);
+      expect(titles(result)).toEqual(['Release notes']);
+    });
+
+    it('ignores an accessor that returns a non-string', () => {
+      expect(searchItems(posts, '3', [(post) => post.tags.length])).toEqual([]);
+    });
+  });
 });

@@ -17,6 +17,7 @@ import {
 } from './apolloMocks.js';
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
+import { expandFieldOverrides } from './fieldOverrides.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
   type OperationMocks,
@@ -26,6 +27,8 @@ import {
 import { qaListLength } from './qa.js';
 import {
   isReciprocal,
+  isRelationFilter,
+  pickFiltered,
   pickRelated,
   reciprocalEnumerable,
   relationBounds,
@@ -452,7 +455,7 @@ function applyDerive(
 }
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
-  const resolved = resolveOptions(options);
+  const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
   validateAliases(schema, resolved.aliases);
   const { faker, qa, nullChance } = resolved;
@@ -520,12 +523,12 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           continue;
         }
 
-        if (typeof spec !== 'function') {
+        if (typeof spec !== 'function' && !isRelationFilter(spec)) {
           instance[fieldName] = pickRelated(targetPool, plan.bounds, isList, faker);
           continue;
         }
 
-        const value = spec({
+        const relationCtx = {
           pool: targetPool,
           faker,
           index,
@@ -533,8 +536,22 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           typeName: objectType.name,
           fieldName,
           isList,
-        });
+        };
         const site = `${objectType.name}.${fieldName}`;
+
+        if (isRelationFilter(spec)) {
+          instance[fieldName] = pickFiltered(
+            targetPool,
+            spec,
+            plan.bounds,
+            relationCtx,
+            site,
+            faker,
+          );
+          continue;
+        }
+
+        const value = spec(relationCtx);
         instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }

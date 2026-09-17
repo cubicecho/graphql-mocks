@@ -43,30 +43,76 @@ export function paginate<T>(items: readonly T[], args: PageArgs): T[] {
 }
 
 /**
+ * One searchable field: a key, a dotted path through related objects (`'author.name'`), or an
+ * accessor for anything a path can't express. A path may cross lists — `'comments.text'` on a
+ * post searches every comment.
+ */
+export type SearchField<T> = string | ((item: T) => unknown);
+
+/**
+ * Collect every string a dotted path reaches. A nullish link ends that branch rather than
+ * throwing, and a list is stepped through, so one path can yield several candidates.
+ */
+function stringsAtPath(value: unknown, path: readonly string[], found: string[]): void {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    for (const entry of value) stringsAtPath(entry, path, found);
+    return;
+  }
+  const [head, ...tail] = path;
+  if (head === undefined) {
+    if (typeof value === 'string') found.push(value);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  stringsAtPath((value as Record<string, unknown>)[head], tail, found);
+}
+
+/** The strings one field contributes: an accessor's return value, or whatever its path reaches. */
+function stringsForField<T>(item: T, field: SearchField<T>): string[] {
+  if (typeof field === 'function') {
+    const value = field(item);
+    return typeof value === 'string' ? [value] : [];
+  }
+  const found: string[] = [];
+  stringsAtPath(item, field.split('.'), found);
+  return found;
+}
+
+/**
  * Case-insensitive substring filter. A null, undefined or empty term is a no-op and returns
- * every item. `fields` restricts which properties are searched; omitted, every own
- * string-valued property of each item is searched.
+ * every item.
+ *
+ * `fields` restricts which properties are searched. Each entry is a key, a dotted path into a
+ * related object, or an accessor function; a path steps through lists and treats a missing link
+ * as a non-match rather than throwing. Omit `fields` and every own string-valued property of
+ * each item is searched — that shallow default never follows relations, so name the paths you
+ * want when a related object is what you're filtering on.
  *
  * ```ts
- * searchItems(users, 'ann');            // any string field contains "ann"
- * searchItems(users, 'ann', ['name']);  // only `name`
+ * searchItems(users, 'ann');                        // any own string field contains "ann"
+ * searchItems(users, 'ann', ['name']);              // only `name`
+ * searchItems(posts, 'ann', ['author.name']);       // through a relation
+ * searchItems(posts, 'ann', ['comments.text']);     // through a list relation
+ * searchItems(posts, 'ann', [(p) => p.author?.email]);
  * ```
  */
 export function searchItems<T>(
   items: readonly T[],
   term: string | null | undefined,
-  fields?: readonly string[],
+  fields?: readonly SearchField<T>[],
 ): T[] {
   if (term == null || term === '') return items.slice();
   const needle = term.toLowerCase();
+  const matches = (value: string) => value.toLowerCase().includes(needle);
+
   return items.filter((item) => {
     if (item == null || typeof item !== 'object') return false;
-    const record = item as Record<string, unknown>;
-    const keys = fields ?? Object.keys(record);
-    for (const key of keys) {
-      const value = record[key];
-      if (typeof value === 'string' && value.toLowerCase().includes(needle)) return true;
+    if (fields === undefined) {
+      return Object.values(item as Record<string, unknown>).some(
+        (value) => typeof value === 'string' && matches(value),
+      );
     }
-    return false;
+    return fields.some((field) => stringsForField(item, field).some(matches));
   });
 }

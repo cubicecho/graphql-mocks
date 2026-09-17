@@ -489,3 +489,135 @@ describe('relations on the operation path', () => {
     expect(data.users.length).toBeLessThanOrEqual(4);
   });
 });
+
+describe('a where predicate', () => {
+  const query = (source: string) => parse(source);
+
+  /** Half the users active, so a predicate on `isActive` has something to narrow. */
+  const build = (relations: RelationsConfig, extra?: Parameters<typeof buildMocks>[1]) =>
+    buildMocks(schema, {
+      seed: 5,
+      count: 6,
+      stableIds: true,
+      relations,
+      overrides: { User: { isActive: (_f, { index }) => index % 2 === 0 } },
+      ...extra,
+    });
+
+  it('draws a list from only the pooled objects it keeps', () => {
+    const mocks = build({ Post: { comments: { where: (c) => c.id !== 'Comment-0' } } });
+    const posts = mocks.Post as { comments: { id: string }[] }[];
+    expect(posts.flatMap((post) => post.comments.map((c) => c.id))).not.toContain('Comment-0');
+    expect(posts.some((post) => post.comments.length > 0)).toBe(true);
+  });
+
+  it('sizes the draw with size, like any other relation', () => {
+    const mocks = build({ Post: { comments: { size: 2, where: () => true } } });
+    for (const post of mocks.Post as { comments: unknown[] }[]) {
+      expect(post.comments).toHaveLength(2);
+    }
+  });
+
+  it('falls back to the usual sizing when size is omitted', () => {
+    const mocks = build({ Post: { comments: { where: () => true } } });
+    for (const post of mocks.Post as { comments: unknown[] }[]) {
+      expect(post.comments.length).toBeGreaterThanOrEqual(1);
+      expect(post.comments.length).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('cycles a singular field across the candidates by the owner index', () => {
+    const mocks = build({ Todo: { user: { where: (u) => u.isActive === true } } });
+    const active = (mocks.User as { id: string; isActive: boolean }[])
+      .filter((user) => user.isActive)
+      .map((user) => user.id);
+    const assigned = (mocks.Todo as { user: { id: string } }[]).map((todo) => todo.user.id);
+    // Stable and spread rather than clustered: owner i takes candidate i, wrapping.
+    expect(assigned).toEqual(assigned.map((_id, index) => active[index % active.length]));
+    expect(new Set(assigned).size).toBe(Math.min(active.length, assigned.length));
+  });
+
+  it('hands the predicate the owning instance alongside the candidate', () => {
+    const seen: { typeName: string; fieldName: string; isList: boolean }[] = [];
+    build({
+      Todo: {
+        user: {
+          where: (_item, ctx) => {
+            if (ctx.index === 0) {
+              seen.push({ typeName: ctx.typeName, fieldName: ctx.fieldName, isList: ctx.isList });
+            }
+            return true;
+          },
+        },
+      },
+    });
+    expect(seen[0]).toEqual({ typeName: 'Todo', fieldName: 'user', isList: false });
+  });
+
+  it('throws when the predicate matches nothing', () => {
+    expect(() => build({ Post: { comments: { where: () => false } } })).toThrow(
+      /"Post.comments" has a `where` that matched none of the 6 pooled objects/,
+    );
+  });
+
+  it('throws when the pool it draws from is empty', () => {
+    expect(() =>
+      build({ Post: { comments: { where: () => true } } }, { count: { _default: 6, Comment: 0 } }),
+    ).toThrow(/"Post.comments" filters with `where`, but the pool it draws from is empty/);
+  });
+
+  it('never runs the predicate for a spec that asks for nothing', () => {
+    const where = vi.fn(() => true);
+    const mocks = build({ Post: { comments: { size: null, where } } });
+    expect((mocks.Post as { comments: unknown[] }[])[0]?.comments).toEqual([]);
+    expect(where).not.toHaveBeenCalled();
+  });
+
+  it('rejects a where that is not a function before anything is generated', () => {
+    expect(() =>
+      buildMocks(schema, {
+        seed: 1,
+        relations: { Post: { comments: { where: 'nope' } as never } },
+      }),
+    ).toThrow(/"Post.comments" has a `where` that is not a function/);
+  });
+
+  it('grows the target pool to the size a filtered list asks for', () => {
+    // A filter draws from the same pool, only a narrower part of it, so the demand still counts.
+    const mocks = buildMocks(schema, {
+      seed: 5,
+      relations: { Post: { comments: { size: 12, where: () => true } } },
+    });
+    expect((mocks.Comment as unknown[]).length).toBe(12);
+  });
+
+  it('narrows the pool a root field serves', () => {
+    const mocks = build({ Query: { users: { where: (u) => u.isActive === true } } });
+    const data = mocks.dataForOperation(query('{ users { id isActive } }')) as {
+      users: { isActive: boolean }[];
+    };
+    expect(data.users.length).toBeGreaterThan(0);
+    expect(data.users.every((user) => user.isActive)).toBe(true);
+  });
+
+  it('leaves argument matching to work on what the filter left', () => {
+    const mocks = build({ Query: { users: { where: (u) => u.isActive === true } } });
+    const data = mocks.dataForOperation(
+      query('{ users(limit: 2) { id isActive } }'),
+      undefined,
+      true,
+    ) as { users: { isActive: boolean }[] };
+    expect(data.users).toHaveLength(2);
+    expect(data.users.every((user) => user.isActive)).toBe(true);
+  });
+
+  it('is reproducible across rebuilds', () => {
+    const ids = () =>
+      (
+        build({ Post: { comments: { size: 2, where: (c) => c.id !== 'Comment-0' } } }).Post as {
+          comments: { id: string }[];
+        }[]
+      ).map((post) => post.comments.map((c) => c.id));
+    expect(ids()).toEqual(ids());
+  });
+});

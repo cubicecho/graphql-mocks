@@ -8,7 +8,7 @@ import {
   isUnionType,
 } from 'graphql';
 import { unwrapType } from './typeMocker.js';
-import type { RelationSpec, RelationsConfig } from './types.js';
+import type { RelationContext, RelationFilter, RelationSpec, RelationsConfig } from './types.js';
 
 /**
  * The size `'all'` resolves to: unbounded, clamped to the target pool at draw time.
@@ -19,6 +19,11 @@ export const UNBOUNDED = Number.POSITIVE_INFINITY;
 /** A bare object is a map of keys, never a `{ min, max }` range — see {@link RelationsConfig}. */
 function isMap(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/** A `{ size?, where }` spec, told apart from a `{ min, max }` range by its predicate. */
+export function isRelationFilter(spec: RelationSpec | undefined): spec is RelationFilter {
+  return isMap(spec) && typeof (spec as { where?: unknown }).where === 'function';
 }
 
 /**
@@ -57,6 +62,9 @@ export function relationBounds(
   spec: RelationSpec | undefined,
   fallback: { min: number; max: number },
 ): { min: number; max: number } | null {
+  // A filter narrows *which* objects; its `size` says how many, and is sized like any other
+  // spec when absent.
+  if (isRelationFilter(spec)) return relationBounds(spec.size, fallback);
   if (spec === null) return null;
   if (spec === undefined || typeof spec === 'function') return fallback;
   if (spec === 'all') return { min: UNBOUNDED, max: UNBOUNDED };
@@ -104,14 +112,68 @@ export function pickRelated(
   });
 }
 
+/**
+ * The pooled objects a filter's predicate keeps. Throws rather than returning an empty set: a
+ * predicate that matches nothing is a statement the pool cannot satisfy, and wiring `null` for
+ * it hands the mistake back hours later as an unexplained missing relationship.
+ */
+export function filterCandidates(
+  pool: readonly Record<string, unknown>[],
+  filter: RelationFilter,
+  ctx: RelationContext,
+  site: string,
+): Record<string, unknown>[] {
+  const candidates = pool.filter((item) => filter.where(item, ctx));
+  if (candidates.length > 0) return candidates;
+  throw new TypeError(
+    pool.length === 0
+      ? `[graphql-mocks] relations: "${site}" filters with \`where\`, but the pool it draws from is empty — nothing can match`
+      : `[graphql-mocks] relations: "${site}" has a \`where\` that matched none of the ${pool.length} pooled objects — widen it, or use a relation function if "none" is a legitimate answer here`,
+  );
+}
+
+/**
+ * Draw a field's value from the candidates a filter keeps.
+ *
+ * A list is sampled the way any sized relation is. A singular field is taken by **cycling on
+ * the owner's index** rather than drawn at random: that is what the hand-written form of this
+ * was doing with `% length`, and it keeps each owner's assignment stable across a rebuild and
+ * spread across the candidates instead of clustering.
+ */
+export function pickFiltered(
+  pool: readonly Record<string, unknown>[],
+  filter: RelationFilter,
+  bounds: { min: number; max: number } | null,
+  ctx: RelationContext,
+  site: string,
+  faker: Faker,
+): unknown {
+  if (bounds === null || bounds.max === 0) return ctx.isList ? [] : null;
+  const candidates = filterCandidates(pool, filter, ctx, site);
+  if (ctx.isList) return pickRelated(candidates, bounds, true, faker);
+  return candidates[ctx.index % candidates.length];
+}
+
 /** A spec that asks for nothing at all. Functions are dynamic, so they're never "empty" here. */
 function isEmptySpec(spec: RelationSpec | undefined): boolean {
+  if (isRelationFilter(spec)) return isEmptySpec(spec.size);
   if (spec === null || spec === 0) return true;
   return typeof spec === 'object' && spec.max === 0;
 }
 
 /** Sizes must be whole, non-negative, and ordered; anything else is a caller mistake. */
 function validateSize(spec: RelationSpec | undefined, site: string): void {
+  if (isRelationFilter(spec)) {
+    validateSize(spec.size, site);
+    return;
+  }
+  // `where` is what tells a filter from a range, so a non-function one leaves the object
+  // looking like a range with no bounds — say what it actually is instead.
+  if (isMap(spec) && 'where' in spec) {
+    throw new TypeError(
+      `[graphql-mocks] relations: "${site}" has a \`where\` that is not a function, so it is neither a filter nor a { min, max } range`,
+    );
+  }
   const sizes =
     typeof spec === 'number'
       ? [spec]
@@ -220,7 +282,10 @@ export function relationDemand(
       // A singular field needs one object, which the default count already covers.
       if (!isList) continue;
 
-      const spec = resolveRelation(type.name, fieldName, relations);
+      const resolvedSpec = resolveRelation(type.name, fieldName, relations);
+      // A filter draws from the same pool, just a narrower part of it, so the pool still has
+      // to be at least as big as the size asks for.
+      const spec = isRelationFilter(resolvedSpec) ? resolvedSpec.size : resolvedSpec;
       const size = typeof spec === 'number' ? spec : isMap(spec) ? Number(spec.max) : 0;
       if (!size) continue;
 
