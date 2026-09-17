@@ -1,3 +1,10 @@
+# [3.4.0](https://github.com/cubicecho/graphql-mocks/compare/v3.3.0...v3.4.0) (2026-09-17)
+
+
+### Features
+
+* **graphql-mocks:** export the derive and countFields option types ([c4d2256](https://github.com/cubicecho/graphql-mocks/commit/c4d225647cc6bedeb327187ed8d9da1a392a621b))
+
 # [3.3.0](https://github.com/cubicecho/graphql-mocks/compare/v3.2.0...v3.3.0) (2026-09-17)
 
 

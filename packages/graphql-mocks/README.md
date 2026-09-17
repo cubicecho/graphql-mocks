@@ -690,11 +690,24 @@ The same primitives the argument engine uses, exported for the cases it can't re
 import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
 
 paginate(mocks.User, { skip: 10, limit: 5 });  // also offset/first/take
-searchItems(mocks.User, 'ana');                // every string field
+searchItems(mocks.User, 'ana');                // every own string field
 searchItems(mocks.User, 'ana', ['name']);      // named fields only
 ```
 
 Absent or null arguments are no-ops, so they're safe to apply unconditionally.
+
+A `searchItems` field is a key, a **dotted path**, or an accessor. Because relations are wired
+into the pool, a path reaches them — and steps through a list on the way, so a post matches when
+any of its comments does:
+
+```ts
+searchItems(mocks.Post, 'ana', ['title', 'author.name', 'comments.text']);
+searchItems(mocks.Post, 'ana', [(post) => post.author?.email]);
+```
+
+A missing link is a non-match, not a throw, so `author.email` is safe on posts with no author.
+Leaving `fields` off keeps the shallow default — every own string-valued property, relations not
+followed — so name the paths when a related object is what you're filtering on.
 
 ## QA mode
 
@@ -770,7 +783,9 @@ For a single story, the [decorator](#the-storybook-decorator) takes a profile di
 
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
-just that preset gives you the same data back.
+just that preset gives you the same data back. That holds even when you hand it the same options
+object you hand `buildMocks`: a `faker` in there contributes its locale data and is never drawn
+from or re-seeded, so there is nothing to strip out first.
 
 ### Count fields stay in step with their lists
 
@@ -935,7 +950,8 @@ export const Variants = cells.map((cell) => ({
 Either axis may be omitted; `qaPresets` also takes a map (`{ baseline: false, huge: { lists:
 'huge' } }`) when you want your own cell names. Each cell gets its own faker seeded from `seed`,
 so a cell reproduces identically no matter which other cells were requested — `seedPerCell: true`
-opts out when you'd rather the cells differ. With `stableIds`, each cell's ids are prefixed with a
+opts out when you'd rather the cells differ. A `faker` you pass contributes its locale data only;
+it is never drawn from or re-seeded, so reproducibility rests on `seed`. With `stableIds`, each cell's ids are prefixed with a
 slug of its name so pools from different cells don't collide; set `idPrefix` yourself to override.
 
 `buildQaSets` is the QA-only shorthand for the same engine.

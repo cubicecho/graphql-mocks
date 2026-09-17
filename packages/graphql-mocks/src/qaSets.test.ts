@@ -1,4 +1,4 @@
-import { faker } from '@faker-js/faker';
+import { Faker, base, en, faker } from '@faker-js/faker';
 import { parse } from 'graphql';
 import { describe, expect, it } from 'vitest';
 import { QA_PROFILE_NAMES } from './qa.js';
@@ -104,10 +104,25 @@ describe('buildQaSets', () => {
     );
   });
 
-  it('reuses a caller-supplied faker instead of isolating each set', () => {
-    const sets = buildQaSets(schema, { faker, seed: 5, count: 2, profiles: ['emptyText'] });
-    const user = (sets[0]?.mocks.User as Record<string, unknown>[])[0] as Record<string, unknown>;
-    expect(user.name).toBe('');
+  it('isolates each set from a faker the options happen to carry', () => {
+    // The reported trap: reusing the options object a `buildMocks` call already uses meant every
+    // set drew from that one instance, so adding a profile shifted every set after it.
+    const shared = { faker, seed: 5, count: 3 };
+    const together = buildQaSets(schema, { ...shared, profiles: ['longText', 'emptyLists'] });
+    const alone = buildQaSets(schema, { ...shared, profiles: ['emptyLists'] });
+    expect(scalarFields(together[1]?.mocks.User as unknown[])).toBe(
+      scalarFields(alone[0]?.mocks.User as unknown[]),
+    );
+  });
+
+  it('leaves the caller-supplied faker unseeded and unadvanced', () => {
+    const mine = new Faker({ locale: [en, base] });
+    mine.seed(3);
+    const expected = mine.number.int();
+
+    mine.seed(3);
+    buildQaSets(schema, { faker: mine, seed: 99, count: 2, profiles: ['emptyText', 'longText'] });
+    expect(mine.number.int()).toBe(expected);
   });
 
   it('throws on an unknown profile name', () => {
