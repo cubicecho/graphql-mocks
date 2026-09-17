@@ -18,9 +18,10 @@ export {
   paginateArgs,
   searchItems,
 } from './collection.js';
-export type { PageArgs, PaginateArgsOptions, PaginatedArgs } from './collection.js';
+export type { PageArgs, PaginateArgsOptions, PaginatedArgs, SearchField } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
+  AliasesConfig,
   ArgOverride,
   ArgOverrideContext,
   ArgOverrideData,
@@ -32,6 +33,7 @@ export type {
   DeriveContext,
   FieldDeriveFn,
   FieldOverrideFn,
+  FieldOverridesConfig,
   ListSizeConfig,
   MockHelpers,
   MockResult,
@@ -46,7 +48,9 @@ export type {
   QaProfileName,
   QaTextProfile,
   RelationContext,
+  RelationFilter,
   RelationFn,
+  RelationPredicate,
   RelationsConfig,
   RelationSize,
   RelationSpec,

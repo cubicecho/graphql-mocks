@@ -102,10 +102,11 @@ function qaAxis(
  * a plain `buildMocks`. Cell options are merged scenario → preset → the options given here,
  * so an explicit `count` always wins over a scenario's.
  *
- * Unless you pass your own `faker`, each cell is generated from its **own** Faker instance
- * seeded with `seed`, so a cell reproduces identically no matter which other cells were
- * requested alongside it, and cells stay comparable until the scenario or preset actually
- * diverges. `seedPerCell` opts out when you want the cells to differ instead.
+ * Each cell is generated from its **own** Faker instance seeded with `seed`, so a cell
+ * reproduces identically no matter which other cells were requested alongside it, and cells
+ * stay comparable until the scenario or preset actually diverges. `seedPerCell` opts out when
+ * you want the cells to differ instead. A `faker` you pass contributes its locale data only —
+ * it is never drawn from or re-seeded, so reproducibility rests on `seed` alone.
  *
  * With `stableIds`, each cell's ids are prefixed with a slug of its name so pools from
  * different cells don't collide in one cache — unless there is only one cell, or you set
@@ -149,9 +150,10 @@ export function buildMatrix<TTypes extends Record<string, unknown> = Record<stri
             ? seed + index
             : seed;
 
-      // A fresh instance per cell keeps each one independently reproducible; a shared one
-      // would carry state from whichever cells ran before it.
-      const cellFaker = faker ?? new Faker({ locale: [en, base] });
+      // A fresh instance per cell keeps each one independently reproducible; a shared one would
+      // carry state from whichever cells ran before it, and seeding it would reach back into the
+      // caller's own instance. A `faker` passed in contributes its locale data, nothing else.
+      const cellFaker = new Faker({ locale: faker?.rawDefinitions ?? [en, base] });
 
       const layers: (Scenario | BuildMocksOptions)[] = [];
       if (sharedQa) layers.push({ qa: sharedQa });

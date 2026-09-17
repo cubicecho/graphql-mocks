@@ -4,11 +4,13 @@ import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js'
 import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
+  AliasesConfig,
   ArgOverride,
   BuildMocksOptions,
   CountConfig,
   CountFieldsConfig,
   DeriveConfig,
+  FieldOverridesConfig,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
@@ -53,6 +55,14 @@ export interface ResolvedOptions {
   idPrefix: string;
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
+  /**
+   * Left unexpanded here: turning "every `imageUrl`" into per-type entries needs the schema,
+   * which `resolveOptions` has no access to. `expandFieldOverrides` folds it into `overrides`
+   * before anything reads them.
+   */
+  fieldOverrides: FieldOverridesConfig | undefined;
+  /** Extra names to expose fields under, applied after everything else has run. */
+  aliases: AliasesConfig | undefined;
   /** Field functions run after the graph is complete, so they see the finished object. */
   derive: DeriveConfig | undefined;
   /**
@@ -88,6 +98,8 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    fieldOverrides: options.fieldOverrides,
+    aliases: options.aliases,
     derive: options.derive,
     countFields: options.countFields,
     relations: options.relations,

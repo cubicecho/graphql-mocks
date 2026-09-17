@@ -34,8 +34,16 @@ import {
   resolveListTarget,
 } from './argMatching.js';
 import { paginate } from './collection.js';
+import { countsForList } from './countFields.js';
 import { qaFallbackText, qaListLength } from './qa.js';
-import { UNBOUNDED, pickRelated, relationBounds, resolveRelation } from './relations.js';
+import {
+  UNBOUNDED,
+  filterCandidates,
+  isRelationFilter,
+  pickRelated,
+  relationBounds,
+  resolveRelation,
+} from './relations.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
 import type { ArgOverride, ArgOverrideContext } from './types.js';
@@ -294,15 +302,19 @@ function unwrapListArgs(
       ? filtered.slice(0, wired.length)
       : filtered;
   const paged = plan.hasPaging ? paginate(windowed, plan.page) : windowed;
+  // What a paired `totalCount` is now a total *of*: the rows the filters left, before paging.
+  // Paging alone leaves it at the pool size, which is what a pager pages through.
+  const counts = countsForList(named, target.fieldName, windowed.length, ctx.resolved);
 
   if (target.edgeTypeName === undefined) {
-    return { ...wrapper, [target.fieldName]: paged };
+    return { ...wrapper, [target.fieldName]: paged, ...counts };
   }
   const edges = buildEdges(ctx, target.edgeTypeName, paged);
   const pageInfo = syncPageInfo(wrapper, edges, skip, windowed.length);
   return {
     ...wrapper,
     [target.fieldName]: edges,
+    ...counts,
     ...(pageInfo ? { pageInfo } : {}),
   };
 }
@@ -332,8 +344,32 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
   if (bounds === null || bounds.max === 0) return empty;
 
   const isAbstract = isUnionType(named) || isInterfaceType(named);
+
+  // A `where` on a root field says which pooled objects this field serves at all, so it narrows
+  // the pool everything below draws from — argument matching, paging and the random pick then
+  // all work against the narrowed set. The index-cycling a filter uses when it wires an object's
+  // field has nothing to cycle over here: a root field has no owning instance.
+  const site = `${info.parentType.name}.${info.fieldName}`;
+  const narrow = (items: Record<string, unknown>[]): Record<string, unknown>[] =>
+    isRelationFilter(spec)
+      ? filterCandidates(
+          items,
+          spec,
+          {
+            pool: items,
+            faker,
+            index: 0,
+            instance: {},
+            typeName: info.parentType.name,
+            fieldName: info.fieldName,
+            isList,
+          },
+          site,
+        )
+      : items;
+
   const concretePools = () =>
-    isAbstract ? schema.getPossibleTypes(named).flatMap((t) => pool[t.name] ?? []) : [];
+    isAbstract ? schema.getPossibleTypes(named).flatMap((t) => narrow(pool[t.name] ?? [])) : [];
 
   // A function picks the value outright, from whichever pool backs the field. It is the most
   // specific lever there is, so argument matching leaves what it returns alone.
@@ -370,7 +406,7 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
 
     const candidates = possible
       .map((type) => {
-        const items = pool[type.name] ?? [];
+        const items = narrow(pool[type.name] ?? []);
         // Each concrete type gets its own plan: an argument may name a field on one member
         // and not another, and a member matching nothing simply drops out of the draw.
         const typePlan =
@@ -393,9 +429,10 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
         if (isList && ctx.arg.onMissList === 'empty') return [];
         if (!isList && !isNonNullSingular && ctx.arg.onMissSingular === 'empty') return null;
       }
-      // Fall back to the unfiltered draw so a miss still produces something plausible.
+      // Fall back to the unfiltered draw so a miss still produces something plausible. The
+      // `relations` filter still stands: it says what this field serves, not what was asked for.
       const unfiltered = possible
-        .map((t) => pool[t.name] ?? [])
+        .map((t) => narrow(pool[t.name] ?? []))
         .filter((items) => items.length > 0);
       return unfiltered.length === 0 ? empty : draw(unfiltered);
     }
@@ -405,7 +442,8 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
     return draw(candidates);
   }
 
-  const items = pool[named.name];
+  const pooled = pool[named.name];
+  const items = pooled && pooled.length > 0 ? narrow(pooled) : pooled;
   if (items && items.length > 0) {
     // A field returning a wrapper describes the collection inside it, not the container: its
     // `take`/`search`/`id` are about the rows. So when the wrapper has a list this can read,

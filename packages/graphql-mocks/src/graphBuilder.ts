@@ -8,6 +8,7 @@ import {
   isScalarType,
   isUnionType,
 } from 'graphql';
+import { applyAliases, validateAliases } from './aliases.js';
 import {
   type MockOperationOptions,
   mockOperation as buildMockOperation,
@@ -16,6 +17,7 @@ import {
 } from './apolloMocks.js';
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
+import { expandFieldOverrides } from './fieldOverrides.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
   type OperationMocks,
@@ -25,6 +27,8 @@ import {
 import { qaListLength } from './qa.js';
 import {
   isReciprocal,
+  isRelationFilter,
+  pickFiltered,
   pickRelated,
   reciprocalEnumerable,
   relationBounds,
@@ -451,8 +455,9 @@ function applyDerive(
 }
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
-  const resolved = resolveOptions(options);
+  const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
+  validateAliases(schema, resolved.aliases);
   const { faker, qa, nullChance } = resolved;
 
   // Collect all non-operation, non-builtin object types
@@ -518,12 +523,12 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           continue;
         }
 
-        if (typeof spec !== 'function') {
+        if (typeof spec !== 'function' && !isRelationFilter(spec)) {
           instance[fieldName] = pickRelated(targetPool, plan.bounds, isList, faker);
           continue;
         }
 
-        const value = spec({
+        const relationCtx = {
           pool: targetPool,
           faker,
           index,
@@ -531,8 +536,22 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           typeName: objectType.name,
           fieldName,
           isList,
-        });
+        };
         const site = `${objectType.name}.${fieldName}`;
+
+        if (isRelationFilter(spec)) {
+          instance[fieldName] = pickFiltered(
+            targetPool,
+            spec,
+            plan.bounds,
+            relationCtx,
+            site,
+            faker,
+          );
+          continue;
+        }
+
+        const value = spec(relationCtx);
         instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }
@@ -556,6 +575,9 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
   // names a count field wins over phase 4's inference — it was written, the other was guessed.
   applyDerive(objectTypes, pool, resolved);
+
+  // Phase 6: expose aliased fields under their alias names, once the values are final.
+  applyAliases(objectTypes, pool, resolved.aliases);
 
   return createMockResult(pool as Record<string, unknown[]>, schema, resolved);
 }

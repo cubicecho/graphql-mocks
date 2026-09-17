@@ -77,6 +77,40 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/**
+ * Overrides keyed by **field name**, applied to every type that carries a field by that name.
+ * The conventional names a schema repeats — `imageUrl`, `slug`, `avatarUrl`, `externalId` —
+ * otherwise need the same one-line override written once per type, and a new type carrying the
+ * same field quietly gets the default mock until someone notices the rendering is off.
+ *
+ * ```ts
+ * fieldOverrides: {
+ *   imageUrl: (f) => f.image.url(),
+ *   '/Url$/': (f) => f.image.url(),  // a key wrapped in slashes is a pattern
+ * }
+ * ```
+ *
+ * A key wrapped in slashes (`'/Url$/'`, `'/^is[A-Z]/i'`) is a regular expression tested against
+ * the field name — unambiguous, since a GraphQL field name can never contain a slash. An exact
+ * name beats a pattern, earlier patterns beat later ones, and an {@link OverridesConfig} entry
+ * for the same type and field beats both. A key that matches nothing in the schema warns.
+ *
+ * Not schema-checked against `TTypes`: one field name spans types whose field types may differ,
+ * and the pattern form takes keys that are not field names at all. The unmatched-key warning is
+ * what catches a typo here.
+ */
+export type FieldOverridesConfig = Record<string, FieldOverrideFn>;
+
+/**
+ * Expose a field under one or more extra names, per type: `{ User: { addresses: 'locations' } }`
+ * reads as "on every `User`, also expose `addresses` as `locations`".
+ *
+ * The key is the field the schema has; the value is the name (or names) to expose it under.
+ */
+export type AliasesConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: Record<string, string | readonly string[]>;
+};
+
 /** Where a derive is firing, plus the tools the function may need. */
 export interface DeriveContext {
   /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
@@ -154,8 +188,38 @@ export interface RelationContext {
  */
 export type RelationFn = (ctx: RelationContext) => unknown;
 
-/** A size, or a function that computes the field value outright. */
-export type RelationSpec = RelationSize | RelationFn;
+/**
+ * Which pooled objects a relationship field may draw from. Returns a truthy value to keep one.
+ *
+ * The item is a pooled instance, typed loosely because `relations` keys fields by name and
+ * carries no per-field element type — narrow it yourself where the schema types are to hand.
+ */
+export type RelationPredicate = (item: Record<string, unknown>, ctx: RelationContext) => unknown;
+
+/**
+ * Draw the related objects from only the pooled ones a predicate keeps — the shape that
+ * otherwise drops straight to a {@link RelationFn} and re-implements the sizing along with it:
+ *
+ * ```ts
+ * relations: {
+ *   Order: { shippingMethod: { where: (m) => m.isActive } },
+ *   Post: { comments: { size: 3, where: (c) => !c.isSpam } },
+ * }
+ * ```
+ *
+ * A predicate that matches nothing throws: an empty candidate set is a statement the pool
+ * cannot satisfy, and left alone it surfaces much later as an unexplained null. Where "none"
+ * is a legitimate answer, say so with a {@link RelationFn}.
+ */
+export interface RelationFilter {
+  /** How many to draw from the candidates. Sized like any other relation when omitted. */
+  size?: RelationSize;
+  /** Keeps the pooled objects this field may draw from. */
+  where: RelationPredicate;
+}
+
+/** A size, a filtered draw, or a function that computes the field value outright. */
+export type RelationSpec = RelationSize | RelationFilter | RelationFn;
 
 // Relationship specs for one type, keyed by field name, with a `_default` for that type's
 // other relationship fields. Degrades to a loose record when the type's shape is unknown,
@@ -368,6 +432,36 @@ export interface BuildMocksOptions<
    * Return value replaces the generated value for that field entirely.
    */
   overrides?: OverridesConfig<TTypes>;
+  /**
+   * Override functions keyed by field name rather than by type, so one entry covers every type
+   * carrying that field. A key wrapped in slashes is a pattern. A type-keyed `overrides` entry
+   * for the same field still wins, so the general rule stays overridable per type.
+   *
+   * ```ts
+   * fieldOverrides: { imageUrl: (f) => f.image.url(), '/Url$/': (f) => f.image.url() }
+   * ```
+   *
+   * Where you control the schema, a semantic scalar is the better fix; this is for the field
+   * names you cannot retype, which in a stitched or generated schema is most of them.
+   */
+  fieldOverrides?: FieldOverridesConfig;
+  /**
+   * Also expose a field under the name a fragment aliases it to:
+   *
+   * ```ts
+   * // fragment UserCard on User { id, locations: addresses { city } }
+   * buildMocks(schema, { aliases: { User: { addresses: 'locations' } } });
+   * ```
+   *
+   * A component typed by that fragment reads `locations`, which a pooled `User` does not have —
+   * so it renders an empty section, with no type error anywhere to say why. The alias holds the
+   * same reference as the field it mirrors, not a clone, so identity comparisons and the wired
+   * graph keep working through it.
+   *
+   * Applied last, after relationships, counts and derives, so an alias carries the finished
+   * value. An unknown type or field, or an alias that collides with a real field, throws.
+   */
+  aliases?: AliasesConfig<TTypes>;
   /**
    * Shape relationship fields: how many related objects each one gets, or exactly which ones.
    * Applied after every pool exists, which is what `overrides` structurally cannot do.
