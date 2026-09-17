@@ -322,7 +322,33 @@ buildMocks(schema, {
 });
 ```
 
-A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page.
+A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page. `countFields` makes them reflect something a pager can actually page through.
+
+### Counts that agree with their lists
+
+A wrapper's total is only meaningful next to a list holding the whole pool it is a total of. `countFields` pairs each count scalar with the list it counts, and sizes that list to the pool of what it holds:
+
+```ts
+buildMocks(schema, { count: { _default: 40 }, countFields: true });
+// ProductSearchResult.results    -> all 40 pooled products
+// ProductSearchResult.totalCount -> 40, which `limit: 10` can page through four times
+```
+
+Without it, the same coherence takes two options that have to agree on a number written twice — a `relations` size to make `results` hold the pool, and a `derive` per count field to read its length — repeated for every wrapper in the schema.
+
+Pairing is by name, the same convention the [QA list profiles](#count-fields-stay-in-step-with-their-lists) use:
+
+- a name that points at a list wins — `postCount`, `numberOfPosts`, `totalPosts` all pair with `posts`
+- a name that points nowhere — `total`, `count`, `totalCount`, `resultCount` — pairs with the type's list field when it has exactly one, and warns rather than guessing when it has more. A Relay connection pairs the same way: `totalCount` against `edges`
+- a name that points at a list the type doesn't have is left alone
+
+Pass a map for the pairings the convention misses, which also turns the pass on:
+
+```ts
+buildMocks(schema, { countFields: { ProductSearchResult: { hitTotal: 'results' } } });
+```
+
+An explicit `relations` size still decides the list's length, an `overrides` entry for a count is never touched, and a `derive` for the same field still wins — it runs after. Under a QA `lists` profile the profile owns the sizing and this only syncs the counts, so an emptied list reports zero; `countFields: false` turns the pass off either way.
 
 ### Selections that differ only by an argument
 
@@ -754,6 +780,8 @@ buildMocks(schema, {
 
 buildMocks(schema, { qa: { lists: 'empty', syncCounts: false } });
 ```
+
+The same pairing works outside QA mode, where it also sizes the counted list to its pool — see [Counts that agree with their lists](#counts-that-agree-with-their-lists).
 
 ### Notes
 

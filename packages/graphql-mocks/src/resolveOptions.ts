@@ -7,6 +7,7 @@ import type {
   ArgOverride,
   BuildMocksOptions,
   CountConfig,
+  CountFieldsConfig,
   DeriveConfig,
   OverridesConfig,
   RelationsConfig,
@@ -54,6 +55,12 @@ export interface ResolvedOptions {
   overrides: OverridesConfig;
   /** Field functions run after the graph is complete, so they see the finished object. */
   derive: DeriveConfig | undefined;
+  /**
+   * Pair count scalars with the lists they count outside QA mode. Left as given: `countFields.ts`
+   * folds it together with `qa.countFields` at the point of use, since either can turn the pass
+   * on and they merge per type.
+   */
+  countFields: CountFieldsConfig | undefined;
   relations: RelationsConfig | undefined;
   resolveType: ((abstractTypeName: string) => string) | undefined;
   qa: ResolvedQa | undefined;
@@ -82,6 +89,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     scalars: options.scalars,
     overrides: options.overrides ?? {},
     derive: options.derive,
+    countFields: options.countFields,
     relations: options.relations,
     resolveType: options.resolveType,
     qa,

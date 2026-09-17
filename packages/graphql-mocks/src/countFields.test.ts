@@ -185,6 +185,118 @@ describe('syncCountFields', () => {
   });
 });
 
+describe('countFields outside QA mode', () => {
+  const lengthOf = (value: unknown) => (value as unknown[]).length;
+
+  it('pairs counts by name and sizes the counted list to its pool', () => {
+    const { mocks } = build({ countFields: true, count: { Product: 12 } });
+    const feed = first(mocks.Feed);
+    // The only size at which the count and the rows a pager can reach are totals of one thing.
+    expect(lengthOf(feed?.items)).toBe(12);
+    expect(feed?.totalCount).toBe(12);
+    expect(feed?.numberOfItems).toBe(12);
+  });
+
+  it('collapses the two hand-wired options into one', () => {
+    // What this used to take: relations to hold the whole pool, and a derive per count field,
+    // with the pool size written out in both and nothing checking that they agree.
+    const { mocks } = build({
+      count: { Product: 9 },
+      countFields: { ProductSearchResult: { totalCount: 'results' } },
+    });
+    const search = first(mocks.ProductSearchResult);
+    expect(lengthOf(search?.results)).toBe(9);
+    expect(search?.totalCount).toBe(9);
+    expect(search?.resultCount).toBe(9);
+  });
+
+  it('names itself, not qa, when a pairing is ambiguous', () => {
+    const { warn } = build({ countFields: true });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('countFields: "ProductSearchResult.totalCount" looks like a count'),
+    );
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('qa.countFields'));
+  });
+
+  it('warns once, from the pass that sees the finished lists', () => {
+    const { warn } = build({ countFields: true });
+    const ambiguous = warn.mock.calls.filter(([message]) =>
+      String(message).includes('ProductSearchResult.totalCount'),
+    );
+    expect(ambiguous).toHaveLength(1);
+  });
+
+  it('leaves the size to an explicit relations entry, and still counts it', () => {
+    const { mocks } = build({
+      count: { Product: 12 },
+      countFields: true,
+      relations: { Feed: { items: 2 } },
+    });
+    const feed = first(mocks.Feed);
+    expect(lengthOf(feed?.items)).toBe(2);
+    expect(feed?.totalCount).toBe(2);
+  });
+
+  it('lets a QA list profile own the sizing, and only syncs the counts', () => {
+    const { mocks } = build({ countFields: true, qa: 'emptyLists' });
+    const feed = first(mocks.Feed);
+    expect(feed?.items).toEqual([]);
+    expect(feed?.totalCount).toBe(0);
+  });
+
+  it('turns the pass off entirely with false, QA profile or not', () => {
+    const { mocks } = build({ countFields: false, qa: 'emptyLists' });
+    const feed = first(mocks.Feed);
+    expect(feed?.items).toEqual([]);
+    expect(feed?.totalCount).not.toBe(0);
+  });
+
+  it('still loses to a derive for the same field, which runs after it', () => {
+    const { mocks } = build({
+      countFields: true,
+      derive: { Feed: { totalCount: () => 315 } },
+    });
+    const feed = first(mocks.Feed);
+    expect(feed?.totalCount).toBe(315);
+    expect(feed?.numberOfItems).toBe(lengthOf(feed?.items));
+  });
+
+  it('leaves a count that has an explicit overrides entry', () => {
+    const { mocks } = build({ countFields: true, overrides: { Feed: { totalCount: () => 7 } } });
+    const feed = first(mocks.Feed);
+    expect(feed?.totalCount).toBe(7);
+    expect(feed?.numberOfItems).toBe(lengthOf(feed?.items));
+  });
+});
+
+describe('countFields under argument matching', () => {
+  /** The issue's shape: a wrapper whose total has to survive its own pager. */
+  const wrapperSchema = buildSchema(`
+    type Product { id: ID!, name: String! }
+    type ProductSearchResult { results: [Product!]!, totalCount: Int }
+    type Query { searchProducts(search: String, skip: Int, limit: Int): ProductSearchResult }
+  `);
+
+  const SEARCH = parse(
+    'query Search($limit: Int) { searchProducts(limit: $limit) { totalCount results { id } } }',
+  );
+
+  it('reports a total its own pager can page through', () => {
+    const mocks = buildGraph(wrapperSchema, {
+      faker,
+      seed: 4,
+      count: { _default: 40 },
+      countFields: true,
+      matchArguments: true,
+    });
+    const { searchProducts } = mocks.dataForOperation(SEARCH, { limit: 10 }) as {
+      searchProducts: { results: unknown[]; totalCount: number };
+    };
+    expect(searchProducts.results).toHaveLength(10);
+    expect(searchProducts.totalCount).toBe(40);
+  });
+});
+
 describe('classifyCountField', () => {
   it('reads what a field name says it counts', () => {
     expect(classifyCountField('totalCount')).toEqual({ token: 'total', generic: true });
