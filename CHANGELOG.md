@@ -1,3 +1,22 @@
+# [3.5.0](https://github.com/cubicecho/graphql-mocks/compare/v3.4.0...v3.5.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **graphql-mocks:** isolate every QA set from an inherited faker ([09e696d](https://github.com/cubicecho/graphql-mocks/commit/09e696d368beb43d16fc50f609d0cbf02812c4cf)), closes [#44](https://github.com/cubicecho/graphql-mocks/issues/44)
+* **graphql-mocks:** let a paired count follow argument narrowing ([7980656](https://github.com/cubicecho/graphql-mocks/commit/79806568047eec72c3898dc7b5dfd66f6691d99a))
+
+
+### Features
+
+* **graphql-mocks:** add a predicate-based relation spec ([3e6eed9](https://github.com/cubicecho/graphql-mocks/commit/3e6eed9051f05d94c92d1341e44c7d7725f75a1d))
+* **graphql-mocks:** add an aliases build option ([e5c5ebf](https://github.com/cubicecho/graphql-mocks/commit/e5c5ebfbcfe77a065eaa1283e2e29e34a5846388))
+* **graphql-mocks:** add fieldOverrides, keyed by field name ([339d02a](https://github.com/cubicecho/graphql-mocks/commit/339d02a8071244846ae8b30ebc09ff2fdbed5b34))
+* **graphql-mocks:** add paginateArgs for argOverrides handlers ([f768709](https://github.com/cubicecho/graphql-mocks/commit/f76870968a81a37d6ffe7e23d30385bf5d66a0ee))
+* **graphql-mocks:** close three typing gaps that forced casts ([27b2867](https://github.com/cubicecho/graphql-mocks/commit/27b2867586f3ad532b5fa56060045e0d7e24e924)), closes [#46](https://github.com/cubicecho/graphql-mocks/issues/46)
+* **graphql-mocks:** let searchItems reach nested fields ([62c60dd](https://github.com/cubicecho/graphql-mocks/commit/62c60ddbb86f7d458ad258c01d488f463ae6e42b)), closes [#39](https://github.com/cubicecho/graphql-mocks/issues/39)
+* **graphql-mocks:** tag each mock issue with a kind ([61e2113](https://github.com/cubicecho/graphql-mocks/commit/61e211334afea5aea557ab3a3e55b14d2f0441b6))
+
 # [3.4.0](https://github.com/cubicecho/graphql-mocks/compare/v3.3.0...v3.4.0) (2026-09-17)
 
 
