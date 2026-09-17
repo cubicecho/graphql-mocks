@@ -328,7 +328,7 @@ buildMocks(schema, {
 });
 ```
 
-A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page. `countFields` makes them reflect something a pager can actually page through.
+A wrapper's own count scalars (`totalCount`) are left as generated — they reflect the pool, not the page. `countFields` makes them reflect something a pager can actually page through, and keeps them in step when an argument narrows the list.
 
 ### Counts that agree with their lists
 
@@ -355,6 +355,17 @@ buildMocks(schema, { countFields: { ProductSearchResult: { hitTotal: 'results' }
 ```
 
 An explicit `relations` size still decides the list's length, an `overrides` entry for a count is never touched, and a `derive` for the same field still wins — it runs after. Under a QA `lists` profile the profile owns the sizing and this only syncs the counts, so an emptied list reports zero; `countFields: false` turns the pass off either way.
+
+A paired count follows the narrowing, so a filtered list doesn't report the unfiltered pool:
+
+```ts
+// search: matched 2 of 40                    limit alone: page 1 of 40
+{ results: [ /* 2 */ ], totalCount: 2 }       { results: [ /* 10 */ ], totalCount: 40 }
+```
+
+The count is what the filters left, before paging — the same number a Relay `pageInfo` is built from. Paging alone leaves it at the pool size, which is what a pager pages through. Only the pairing does this: with `countFields` off, a count scalar is ordinary generated data that happens to be an `Int`, and nothing says it was ever about that list.
+
+This reaches the count on a *wrapper* type, next to the list the arguments narrowed. A count sitting beside a plain list field (`user { posts(search: "x") { id } postCount }`) is resolved from the wired object and still reports what was wired.
 
 ### Selections that differ only by an argument
 

@@ -248,6 +248,116 @@ describe('an emptied list stays empty', () => {
   });
 });
 
+describe('a paired count follows the narrowing', () => {
+  /**
+   * The same graph with `countFields` on, so `totalCount` is the total *of* `results` rather
+   * than an unrelated Int that happens to sit next to it. No `relations` entry here: a counted
+   * list holds the whole pool, which is what makes the count worth paging through.
+   */
+  const counted = (options?: Parameters<typeof buildMocks>[1]) => {
+    const built = buildMocks(schema, {
+      seed: 11,
+      count: 20,
+      stableIds: true,
+      matchArguments: true,
+      countFields: true,
+      overrides: { Product: { name: (_f, { index }) => (index < 3 ? 'Widget' : 'Gadget') } },
+      ...options,
+    });
+    return <T>(query: string): T => {
+      const data = built.dataForOperation(parse(query)) as Record<string, unknown>;
+      const [value] = Object.values(data);
+      return value as T;
+    };
+  };
+
+  type Wrapper = { results: unknown[]; totalCount: number };
+
+  it('leaves the count at the pool size when only paging was asked for', () => {
+    // A pager pages through the whole pool; the page it is showing is `results.length`.
+    const result = counted()<Wrapper>(
+      '{ productSearch(skip: 2, take: 3) { results { id } totalCount } }',
+    );
+    expect(result.results).toHaveLength(3);
+    expect(result.totalCount).toBe(20);
+  });
+
+  it('narrows the count to the rows a filter left', () => {
+    const result = counted()<Wrapper>(
+      '{ productSearch(search: "Widget", take: 10) { results { id } totalCount } }',
+    );
+    expect(result.results).toHaveLength(3);
+    expect(result.totalCount).toBe(3);
+  });
+
+  it('counts what the filter matched, not what the page shows', () => {
+    const result = counted()<Wrapper>(
+      '{ productSearch(search: "Gadget", take: 2) { results { id } totalCount } }',
+    );
+    expect(result.results).toHaveLength(2);
+    expect(result.totalCount).toBe(17);
+  });
+
+  it('reports zero when a filter matches nothing', () => {
+    const result = counted()<Wrapper>(
+      '{ productSearch(search: "nothing-matches-this") { results { id } totalCount } }',
+    );
+    expect(result.results).toEqual([]);
+    expect(result.totalCount).toBe(0);
+  });
+
+  it('follows the narrowing on a Relay connection too', () => {
+    const result = counted()<{ edges: unknown[]; totalCount: number }>(
+      '{ products(search: "Widget") { edges { cursor } totalCount } }',
+    );
+    expect(result.edges).toHaveLength(3);
+    expect(result.totalCount).toBe(3);
+  });
+
+  /** Both "leave it alone" cases pin the count, so a rewrite would be unmistakable. */
+  const pinnedCount = {
+    Product: { name: (_f: unknown, { index }: { index: number }) => (index < 3 ? 'Widget' : 'G') },
+    ProductSearchResult: { totalCount: () => 315 },
+  };
+
+  it('leaves a count alone when nothing paired it with the list', () => {
+    // Without count syncing, `totalCount` is ordinary generated data that happens to be an Int.
+    // Rewriting it would invent a relationship the build never asked for.
+    const result = counted({ countFields: false, overrides: pinnedCount })<Wrapper>(
+      '{ productSearch(search: "Widget") { results { id } totalCount } }',
+    );
+    expect(result.results).toHaveLength(3);
+    expect(result.totalCount).toBe(315);
+  });
+
+  it('leaves an explicitly overridden count alone', () => {
+    // Count syncing is on, but an `overrides` entry is a deliberate value, so the pairing that
+    // would have rewritten it is never made — here or in the build's own sync pass.
+    const result = counted({ overrides: pinnedCount })<Wrapper>(
+      '{ productSearch(search: "Widget") { results { id } totalCount } }',
+    );
+    expect(result.results).toHaveLength(3);
+    expect(result.totalCount).toBe(315);
+  });
+
+  it('never mutates the pooled wrapper on the way', () => {
+    const built = buildMocks(schema, {
+      seed: 11,
+      count: 20,
+      stableIds: true,
+      matchArguments: true,
+      countFields: true,
+      overrides: { Product: { name: (_f, { index }) => (index < 3 ? 'Widget' : 'Gadget') } },
+    });
+    const pooled = (built.ProductSearchResult ?? [])[0] as Wrapper;
+    const before = pooled.totalCount;
+    built.dataForOperation(
+      parse('{ productSearch(search: "Widget") { results { id } totalCount } }'),
+    );
+    expect(pooled.totalCount).toBe(before);
+  });
+});
+
 describe('Relay connections', () => {
   it('pages edges and keeps them as edges', () => {
     const result = run<{ edges: { cursor: string; node: { id: string } }[] }>(
