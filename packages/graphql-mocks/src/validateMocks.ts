@@ -80,10 +80,24 @@ function isVariants(value: unknown): value is Record<string, unknown> {
 /**
  * Flatten whatever was handed in — one mock, an array, a variants trio, or a module namespace
  * full of any of those — into mocks paired with the path they were found at.
+ *
+ * `seen` is what keeps a module that exports built mock data alongside its mocks from running the
+ * stack out: a pooled object is a plain object, so the walk descends into it, and
+ * `pool[0].category.products[0].category` comes back round. Visiting each object once stops that
+ * without skipping anything a depth cap would skip.
  */
-function collect(value: unknown, path: string, into: { path: string; mock: unknown }[]): void {
+function collect(
+  value: unknown,
+  path: string,
+  into: { path: string; mock: unknown }[],
+  seen: WeakSet<object>,
+): void {
+  if (typeof value === 'object' && value !== null) {
+    if (seen.has(value)) return; // pooled objects are cyclic by design
+    seen.add(value);
+  }
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => collect(entry, `${path}[${index}]`, into));
+    value.forEach((entry, index) => collect(entry, `${path}[${index}]`, into, seen));
     return;
   }
   if (isMockLike(value)) {
@@ -91,12 +105,14 @@ function collect(value: unknown, path: string, into: { path: string; mock: unkno
     return;
   }
   if (isVariants(value)) {
-    for (const key of VARIANT_KEYS) collect(value[key], `${path}.${key}`, into);
+    for (const key of VARIANT_KEYS) collect(value[key], `${path}.${key}`, into, seen);
     return;
   }
   // A module namespace or a keyed map: recurse, skipping exports that aren't mocks at all.
   if (isPlainObject(value)) {
-    for (const [key, entry] of Object.entries(value)) collect(entry, `${path}.${key}`, into);
+    for (const [key, entry] of Object.entries(value)) {
+      collect(entry, `${path}.${key}`, into, seen);
+    }
   }
 }
 
@@ -187,7 +203,7 @@ function describe(value: unknown): string {
 export function validateMocks(input: unknown, options: ValidateMocksOptions = {}): MockIssue[] {
   const issues: MockIssue[] = [];
   const found: { path: string; mock: unknown }[] = [];
-  collect(input, 'mocks', found);
+  collect(input, 'mocks', found, new WeakSet());
 
   if (found.length === 0) {
     issues.push({ path: 'mocks', message: 'no mocks found — nothing was checked' });

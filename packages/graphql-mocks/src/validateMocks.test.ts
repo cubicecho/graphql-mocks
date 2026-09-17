@@ -1,7 +1,8 @@
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
-import { parse } from 'graphql';
+import { buildSchema, parse } from 'graphql';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockOperation, mockOperationVariants } from './apolloMocks.js';
+import { buildMocks } from './mockSchema.js';
 import { assertValidMocks, validateMocks } from './validateMocks.js';
 
 const UserQuery = parse('query User($id: ID!) { user(id: $id) { id name } }') as TypedDocumentNode<
@@ -219,6 +220,53 @@ describe('validateMocks', () => {
       { probeVariables: {} },
     );
     expect(issues[0]?.message).toContain('threw when called');
+  });
+});
+
+describe('cyclic exports', () => {
+  /** The arrangement the docs recommend: the pool a module builds, next to the mocks built from it. */
+  const schema = buildSchema(`
+    type Category { id: ID!, name: String!, products: [Product!]! }
+    type Product { id: ID!, name: String!, category: Category! }
+    type Query { products: [Product!]! }
+  `);
+
+  const moduleNamespace = () => {
+    const mocks = buildMocks(schema, { seed: 3, count: 4, stableIds: true });
+    return {
+      productPool: mocks.Product,
+      ProductListMocks: mockOperationVariants(UserQuery, { user: { id: '1', name: 'Ada' } }),
+    };
+  };
+
+  it('walks a module that also exports built mock data', () => {
+    const namespace = moduleNamespace();
+    const pool = namespace.productPool as { category: { products: unknown[] } }[];
+    // The cycle the walk used to fall into, asserted so the test still means something if the
+    // builder ever stops mirroring relationships.
+    expect(pool[0]?.category.products).toContain(pool[0]);
+
+    const issues = validateMocks(namespace);
+    expect(issues).toEqual([]);
+  });
+
+  it('finds the mocks in that module rather than skipping the export wholesale', () => {
+    const namespace = {
+      ...moduleNamespace(),
+      BrokenMocks: { request: { query: UserQuery }, result: { data: () => ({}) } },
+    };
+    const issues = validateMocks(namespace);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe('mocks.BrokenMocks.result.data');
+  });
+
+  it('reports a mock reachable at two paths once', () => {
+    const shared = validMock();
+    expect(validateMocks({ a: shared, b: shared })).toEqual([]);
+    const broken = { request: { query: UserQuery }, result: {} };
+    const issues = validateMocks({ a: broken, b: broken });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe('mocks.a.result');
   });
 });
 
