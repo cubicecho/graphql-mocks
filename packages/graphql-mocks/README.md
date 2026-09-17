@@ -1042,3 +1042,19 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |
 | `argOverrides` | `ArgOverride[]` | `[]` | Answer one field by its argument values — see [Selections that differ only by an argument](#selections-that-differ-only-by-an-argument) |
+
+Each structured option's shape is exported as a type, so a config can be declared
+away from the `buildMocks` call and still be checked — `CountConfig`,
+`OverridesConfig`, `DeriveConfig`, `RelationsConfig`, `CountFieldsConfig`,
+`QaConfig`, `ArgOverride`, `Scenario`, and `ScenarioMap`. Each takes the same
+optional `TTypes` map as `buildMocks`, which is what binds its keys to the schema:
+
+```ts
+import type { DeriveConfig } from '@vantreeseba/graphql-mocks';
+
+const derive: DeriveConfig<SchemaTypeMap> = {
+  User: { fullName: (self) => `${self.firstName} ${self.lastName}` },
+};
+
+buildMocks<SchemaTypeMap>(schema, { derive });
+```
