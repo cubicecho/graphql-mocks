@@ -17,6 +17,18 @@ import { type DocumentNode, Kind } from 'graphql';
 
 /** One problem found with one mock. */
 export interface MockIssue {
+  /**
+   * Which kind of problem this is:
+   *
+   * - `'invalid'` — a mock was checked and something about it is wrong.
+   * - `'empty'` — the walk found no mocks at all, so nothing was checked. A module that
+   *   silently stops exporting mocks looks identical to a module whose mocks are all fine,
+   *   and this is what tells them apart. Filter it out deliberately for a fixture module
+   *   that legitimately holds none.
+   *
+   * There is at most one `'empty'` issue, and it is never accompanied by others.
+   */
+  kind: 'empty' | 'invalid';
   /** Where the offending value sat in what was handed in, e.g. `[3].result.data.user`. */
   path: string;
   message: string;
@@ -197,6 +209,14 @@ function describe(value: unknown): string {
  * it('every mock is well formed', () => assertValidMocks(mocks));
  * ```
  *
+ * The keyed map `mockOperationsFrom` returns is walked like any other — a module exporting one
+ * is checked to the same depth as a hand-written one. Its entries are lazy, so validating a
+ * module **forces every entry**: that is what validation is for, but it is the opposite of what
+ * the map is optimised for, so keep the check in a test rather than in the module itself.
+ *
+ * Finding nothing is itself reported, as the single issue `kind: 'empty'` — a module that
+ * quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine.
+ *
  * Returns every problem found rather than stopping at the first, so one run fixes a directory.
  * {@link assertValidMocks} is the same check as a throwing assertion.
  */
@@ -206,7 +226,7 @@ export function validateMocks(input: unknown, options: ValidateMocksOptions = {}
   collect(input, 'mocks', found, new WeakSet());
 
   if (found.length === 0) {
-    issues.push({ path: 'mocks', message: 'no mocks found — nothing was checked' });
+    issues.push({ kind: 'empty', path: 'mocks', message: 'no mocks found — nothing was checked' });
     return issues;
   }
 
@@ -216,7 +236,9 @@ export function validateMocks(input: unknown, options: ValidateMocksOptions = {}
     const operationName = isPlainObject(request) ? operationNameOf(request.query) : undefined;
     const report = (at: string, message: string) =>
       issues.push(
-        operationName === undefined ? { path: at, message } : { path: at, message, operationName },
+        operationName === undefined
+          ? { kind: 'invalid', path: at, message }
+          : { kind: 'invalid', path: at, message, operationName },
       );
 
     if (!isPlainObject(request)) {
