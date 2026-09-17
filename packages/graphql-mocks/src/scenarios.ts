@@ -71,7 +71,9 @@ function warnScalarInversion(merged: Layer, qaAfterScalars: boolean): void {
  * key by key so a scenario can add to one without discarding the rest; everything else is
  * last-one-wins.
  */
-export function mergeScenarios(layers: readonly (Scenario | BuildMocksOptions)[]): Layer {
+export function mergeScenarios<TTypes extends Record<string, unknown> = Record<string, unknown>>(
+  layers: readonly (Scenario<NoInfer<TTypes>> | BuildMocksOptions<NoInfer<TTypes>>)[],
+): Layer {
   const merged: Layer = {};
   let scalarsAt = -1;
   let qaAt = -1;
@@ -130,16 +132,41 @@ export function applyScenarios(options: BuildMocksOptions): BuildMocksOptions {
  * buildMocks(schema, { scenario: scenarios.newUser, seed: 42 });
  * ```
  *
- * For schema-checked type and field names, add `satisfies ScenarioMap<SchemaTypeMap>`.
+ * Call it with a type map and no arguments to get a checker bound to that map, so type and
+ * field names are checked against the schema while the literal keys survive:
+ *
+ * ```ts
+ * export const scenarios = defineScenarios<SchemaTypeMap>()({
+ *   newUser: { relations: { User: { todos: null } } },
+ * });
+ * ```
+ *
+ * The currying is what keeps both: TypeScript cannot infer the scenario map while you supply
+ * the type map by hand. `defineScenarios({ … }) satisfies ScenarioMap<SchemaTypeMap>` is the
+ * same check written the other way round.
  */
-export function defineScenarios<const T extends ScenarioMap>(scenarios: T): T {
-  return scenarios;
+export function defineScenarios<TTypes extends Record<string, unknown>>(): <
+  const T extends ScenarioMap<TTypes>,
+>(
+  scenarios: T,
+) => T;
+export function defineScenarios<const T extends ScenarioMap>(scenarios: T): T;
+export function defineScenarios(scenarios?: ScenarioMap): unknown {
+  return scenarios ?? (<T>(inner: T): T => inner);
 }
 
 /**
  * Combine scenarios into one, applied left to right. The result is an ordinary scenario, so
  * it can be composed further or passed straight to `buildMocks`.
+ *
+ * The type map rides along: `composeScenarios<SchemaTypeMap>(a, b)` checks every piece against
+ * that map and returns a scenario still bound to it, so a piece written for a different schema
+ * no longer merges in silently. The map is never inferred from the arguments — inferring it
+ * from the first scenario would make every later one conform to whatever types that one
+ * happened to mention.
  */
-export function composeScenarios(...scenarios: Scenario[]): Scenario {
-  return mergeScenarios(scenarios) as Scenario;
+export function composeScenarios<TTypes extends Record<string, unknown> = Record<string, unknown>>(
+  ...scenarios: Scenario<NoInfer<TTypes>>[]
+): Scenario<TTypes> {
+  return mergeScenarios<TTypes>(scenarios) as Scenario<TTypes>;
 }

@@ -1,4 +1,4 @@
-import { faker } from '@faker-js/faker';
+import { type Faker, faker, fakerDE } from '@faker-js/faker';
 import { describe, expect, it } from 'vitest';
 import { buildMatrix } from './matrix.js';
 import { buildMocks } from './mockSchema.js';
@@ -191,10 +191,24 @@ describe('buildMatrix', () => {
     expect(cell?.options.faker).toBeDefined();
   });
 
-  it('shares one faker instance when the caller supplies it', () => {
+  it('gives every cell its own faker even when the caller supplies one', () => {
     const cells = buildMatrix(schema, { faker, qaPresets: ['emptyLists', 'emptyText'], seed: 2 });
-    expect(cells[0]?.options.faker).toBe(faker);
-    expect(cells[1]?.options.faker).toBe(faker);
+    expect(cells[0]?.options.faker).not.toBe(faker);
+    expect(cells[0]?.options.faker).not.toBe(cells[1]?.options.faker);
+  });
+
+  it('takes the locale from a caller-supplied faker', () => {
+    const [cell] = buildMatrix(schema, { faker: fakerDE, seed: 2, count: 1 });
+    expect((cell?.options.faker as Faker).getMetadata().language).toBe('de');
+  });
+
+  it('keeps cells reproducible when the options carry a faker', () => {
+    const shared = { faker, seed: 7, count: 3 };
+    const together = buildMatrix(schema, { ...shared, qaPresets: ['longText', 'emptyLists'] });
+    const alone = buildMatrix(schema, { ...shared, qaPresets: ['emptyLists'] });
+    expect(scalarFields(together[1]?.mocks.User as unknown[])).toBe(
+      scalarFields(alone[0]?.mocks.User as unknown[]),
+    );
   });
 
   it('accepts a named qa map for custom cell names and inline configs', () => {
