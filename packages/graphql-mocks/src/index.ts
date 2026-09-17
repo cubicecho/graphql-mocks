@@ -11,7 +11,7 @@ export type {
 } from './apolloMocks.js';
 export { buildMocks } from './mockSchema.js';
 export { paginate, searchItems } from './collection.js';
-export type { PageArgs } from './collection.js';
+export type { PageArgs, SearchField } from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
   ArgOverride,

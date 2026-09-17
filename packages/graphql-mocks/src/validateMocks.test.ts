@@ -194,6 +194,17 @@ describe('validateMocks', () => {
     expect(validateMocks(undefined)[0]?.message).toContain('no mocks found');
   });
 
+  it('tags the empty report so a caller can tell it from a real defect', () => {
+    // Without the tag, "this fixture module holds no mocks on purpose" and "this module stopped
+    // exporting its mocks" are the same string, and filtering one drops the other silently.
+    const empty = validateMocks({ SOME_CONSTANT: 'unrelated' });
+    expect(empty).toHaveLength(1);
+    expect(empty[0]?.kind).toBe('empty');
+
+    const broken = validateMocks({ request: { query: UserQuery }, result: {} });
+    expect(broken.every((issue) => issue.kind === 'invalid')).toBe(true);
+  });
+
   it('leaves a resolver result alone unless probe variables are supplied', () => {
     const mock = {
       request: { query: UserQuery },
@@ -267,6 +278,44 @@ describe('cyclic exports', () => {
     const issues = validateMocks({ a: broken, b: broken });
     expect(issues).toHaveLength(1);
     expect(issues[0]?.path).toBe('mocks.a.result');
+  });
+});
+
+describe('a mockOperationsFrom map', () => {
+  const schema = buildSchema(`
+    type User { id: ID!, name: String! }
+    type Query { users: [User!]! }
+  `);
+  const documents = {
+    UsersDocument: parse('query Users { users { id name } }'),
+    NOT_A_DOCUMENT: 'ignore me',
+  };
+
+  it('is walked to the same depth as a hand-written module', () => {
+    // Three levels, not the two a hand-written module nests: module → keyed map → export name
+    // → variants trio → mock. Forcing the map's lazy entries is the point of validating it.
+    const mocks = buildMocks(schema, { seed: 2, count: 2, stableIds: true });
+    const module = { userMocks: mocks.mockOperationsFrom(documents as never) };
+
+    expect(validateMocks(module)).toEqual([]);
+  });
+
+  it('still reports a problem reached through the map', () => {
+    const mocks = buildMocks(schema, { seed: 2, count: 2, stableIds: true });
+    const module = {
+      userMocks: mocks.mockOperationsFrom(documents as never),
+      handWritten: { BrokenMocks: { request: { query: UserQuery }, result: {} } },
+    };
+
+    const issues = validateMocks(module);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe('mocks.handWritten.BrokenMocks.result');
+  });
+
+  it('reports a map with no documents in it as empty', () => {
+    const mocks = buildMocks(schema, { seed: 2, count: 2 });
+    const issues = validateMocks({ userMocks: mocks.mockOperationsFrom({ NOPE: 1 } as never) });
+    expect(issues[0]?.kind).toBe('empty');
   });
 });
 
