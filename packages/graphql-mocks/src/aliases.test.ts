@@ -5,7 +5,18 @@ import { select } from './plain.js';
 import { schema } from './test/schema.js';
 import type { BuildMocksOptions } from './types.js';
 
-const build = (options: BuildMocksOptions = {}) =>
+/**
+ * The pools these tests read from. Naming them keeps `mocks.User[0]` typed: the bare
+ * `MockResult` only carries an index signature, which `noUncheckedIndexedAccess` widens to
+ * `unknown[] | undefined`.
+ */
+type Pools = Record<'User' | 'Todo' | 'Post' | 'Comment', Record<string, unknown>>;
+
+const build = (options: BuildMocksOptions<Pools> = {}) =>
+  buildMocks<Pools>(schema, { seed: 7, count: 3, stableIds: true, ...options });
+
+/** The error cases name types on purpose that `Pools` does not have, so they build untyped. */
+const buildUntyped = (options: BuildMocksOptions = {}) =>
   buildMocks(schema, { seed: 7, count: 3, stableIds: true, ...options });
 
 describe('aliases', () => {
@@ -78,29 +89,31 @@ describe('aliases', () => {
 
 describe('an aliases config error', () => {
   it('throws for a type the schema does not have', () => {
-    expect(() => build({ aliases: { Userr: { todos: 'tasks' } } })).toThrow(/unknown type "Userr"/);
+    expect(() => buildUntyped({ aliases: { Userr: { todos: 'tasks' } } })).toThrow(
+      /unknown type "Userr"/,
+    );
   });
 
   it('throws for a field the type does not have, naming which side is which', () => {
-    expect(() => build({ aliases: { User: { todoss: 'tasks' } } })).toThrow(
+    expect(() => buildUntyped({ aliases: { User: { todoss: 'tasks' } } })).toThrow(
       /unknown field "User.todoss" — the key is the field being aliased/,
     );
   });
 
   it('throws for a root type, which has no pooled instances', () => {
-    expect(() => build({ aliases: { Query: { users: 'people' } } })).toThrow(
+    expect(() => buildUntyped({ aliases: { Query: { users: 'people' } } })).toThrow(
       /"Query" is an operation type/,
     );
   });
 
   it('throws for a type that is not an object type', () => {
-    expect(() => build({ aliases: { Node: { id: 'key' } } })).toThrow(
+    expect(() => buildUntyped({ aliases: { Node: { id: 'key' } } })).toThrow(
       /"Node" is not an object type/,
     );
   });
 
   it('throws when the alias would land on a real field', () => {
-    expect(() => build({ aliases: { User: { name: 'email' } } })).toThrow(
+    expect(() => buildUntyped({ aliases: { User: { name: 'email' } } })).toThrow(
       /"User.email" is already a field on that type/,
     );
   });
@@ -108,7 +121,7 @@ describe('an aliases config error', () => {
   it('throws before anything is generated', () => {
     let overrideRan = false;
     expect(() =>
-      build({
+      buildUntyped({
         overrides: {
           User: {
             name: () => {
