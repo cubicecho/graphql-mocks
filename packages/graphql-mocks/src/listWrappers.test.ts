@@ -194,6 +194,60 @@ describe('wrapper types in execution', () => {
   });
 });
 
+describe('an emptied list stays empty', () => {
+  /** A graph whose wrappers hold nothing, resolved with argument matching on. */
+  const emptied = (options: Parameters<typeof buildMocks>[1]) => {
+    const mocks = buildMocks(schema, {
+      seed: 11,
+      count: 20,
+      stableIds: true,
+      matchArguments: true,
+      ...options,
+    });
+    return <T>(query: string): T => {
+      const data = mocks.dataForOperation(parse(query)) as Record<string, unknown>;
+      const [value] = Object.values(data);
+      return value as T;
+    };
+  };
+
+  it('answers an emptyLists profile with no rows and a matching total', () => {
+    const result = emptied({ qa: 'emptyLists' })<{ results: unknown[]; totalCount: number }>(
+      '{ productSearch(take: 10) { results { id } totalCount } }',
+    );
+    // The contradiction this is about: the count said zero while the rows came from the pool.
+    expect(result.results).toEqual([]);
+    expect(result.totalCount).toBe(0);
+  });
+
+  it('honours a relations entry that asks for nothing', () => {
+    const result = emptied({ relations: { ProductSearchResult: { results: 0 } } })<{
+      results: unknown[];
+    }>('{ productSearch(skip: 2, take: 3) { results { id } } }');
+    expect(result.results).toEqual([]);
+  });
+
+  it('empties a connection too, pageInfo and all', () => {
+    const result = emptied({ qa: 'emptyLists' })<{
+      edges: unknown[];
+      pageInfo: { hasNextPage: boolean; hasPreviousPage: boolean };
+      totalCount: number;
+    }>(
+      '{ products(first: 5) { edges { cursor } pageInfo { hasNextPage hasPreviousPage } totalCount } }',
+    );
+    expect(result.edges).toEqual([]);
+    expect(result.pageInfo).toEqual({ hasNextPage: false, hasPreviousPage: false });
+    expect(result.totalCount).toBe(0);
+  });
+
+  it('still pages past a list that is merely short', () => {
+    // Only *empty* means empty. A four-row sample of a twenty-deep pool is still a sample, so
+    // paging reaches the pool — the behaviour the whole unwrap path exists for.
+    const result = run<{ results: unknown[] }>('{ productSearch(take: 10) { results { id } } }');
+    expect(result.results).toHaveLength(10);
+  });
+});
+
 describe('Relay connections', () => {
   it('pages edges and keeps them as edges', () => {
     const result = run<{ edges: { cursor: string; node: { id: string } }[] }>(
