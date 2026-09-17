@@ -77,6 +77,30 @@ export type OverridesConfig<TTypes extends Record<string, unknown> = Record<stri
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
 };
 
+/**
+ * Overrides keyed by **field name**, applied to every type that carries a field by that name.
+ * The conventional names a schema repeats — `imageUrl`, `slug`, `avatarUrl`, `externalId` —
+ * otherwise need the same one-line override written once per type, and a new type carrying the
+ * same field quietly gets the default mock until someone notices the rendering is off.
+ *
+ * ```ts
+ * fieldOverrides: {
+ *   imageUrl: (f) => f.image.url(),
+ *   '/Url$/': (f) => f.image.url(),  // a key wrapped in slashes is a pattern
+ * }
+ * ```
+ *
+ * A key wrapped in slashes (`'/Url$/'`, `'/^is[A-Z]/i'`) is a regular expression tested against
+ * the field name — unambiguous, since a GraphQL field name can never contain a slash. An exact
+ * name beats a pattern, earlier patterns beat later ones, and an {@link OverridesConfig} entry
+ * for the same type and field beats both. A key that matches nothing in the schema warns.
+ *
+ * Not schema-checked against `TTypes`: one field name spans types whose field types may differ,
+ * and the pattern form takes keys that are not field names at all. The unmatched-key warning is
+ * what catches a typo here.
+ */
+export type FieldOverridesConfig = Record<string, FieldOverrideFn>;
+
 /** Where a derive is firing, plus the tools the function may need. */
 export interface DeriveContext {
   /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
@@ -368,6 +392,19 @@ export interface BuildMocksOptions<
    * Return value replaces the generated value for that field entirely.
    */
   overrides?: OverridesConfig<TTypes>;
+  /**
+   * Override functions keyed by field name rather than by type, so one entry covers every type
+   * carrying that field. A key wrapped in slashes is a pattern. A type-keyed `overrides` entry
+   * for the same field still wins, so the general rule stays overridable per type.
+   *
+   * ```ts
+   * fieldOverrides: { imageUrl: (f) => f.image.url(), '/Url$/': (f) => f.image.url() }
+   * ```
+   *
+   * Where you control the schema, a semantic scalar is the better fix; this is for the field
+   * names you cannot retype, which in a stitched or generated schema is most of them.
+   */
+  fieldOverrides?: FieldOverridesConfig;
   /**
    * Shape relationship fields: how many related objects each one gets, or exactly which ones.
    * Applied after every pool exists, which is what `overrides` structurally cannot do.

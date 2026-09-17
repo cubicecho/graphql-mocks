@@ -91,6 +91,44 @@ const mocks = buildMocks(schema, {
 });
 ```
 
+#### By field name: `fieldOverrides`
+
+`overrides` is keyed type-first, so a conventional field name — `imageUrl`, `slug`, `avatarUrl`,
+`externalId` — means the same one-line override written once per type that carries it, and a new
+type carrying the same field quietly gets the default mock until someone notices the rendering is
+off. `fieldOverrides` is keyed by the field name instead, and applies to every type that has one:
+
+```ts
+const mocks = buildMocks(schema, {
+  fieldOverrides: {
+    imageUrl: (faker) => faker.image.url(),
+    '/Url$/': (faker) => faker.image.url(),   // a key wrapped in slashes is a pattern
+  },
+  overrides: {
+    Avatar: { imageUrl: () => '/static/avatar.png' },  // still wins, for this type
+  },
+});
+```
+
+The function is the same `(faker, { index, typeName, fieldName })` an `overrides` entry takes —
+`typeName` is how one rule tells apart the types it fires on.
+
+- **A key wrapped in slashes is a regular expression** (`'/Url$/'`, `'/^is[A-Z]/i'`), tested
+  against the field name. Unambiguous: a GraphQL field name is letters, digits and underscores,
+  so it can never contain a slash.
+- **Precedence**: an `overrides` entry for that type and field beats everything; then an exact
+  name; then patterns, earlier ones first.
+- It fires on relationship fields too, exactly as a type-keyed override does — the value is taken
+  as given, and `relations` never touches the field.
+- **A key that matches no field on any mocked type warns**, which is the only typo check a
+  name-keyed map can have. Root fields (`Query.users`) are not mocked per type and so warn here;
+  shape those with `relations` or `argOverrides`.
+- Keys are not checked against a `TTypes` map: one field name spans types whose field types may
+  differ, and a pattern isn't a field name at all.
+
+Where you control the schema, a semantic scalar (`scalar URL`) is the better fix — this is for
+the names you can't retype, which in a stitched or generated schema is most of them.
+
 ### Derived fields
 
 An override fires while the instance is half-built, so it cannot see its siblings. Any field whose value is a function of the rest of the object — a total over a list, a name assembled from its parts, a balance that is a difference of two others — belongs in `derive` instead:
@@ -1030,6 +1068,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `nullChance` | `number` | `0` | Probability (0–1) nullable fields are `null` |
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
 | `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
+| `fieldOverrides` | `Record<field, (faker, ctx) => unknown>` | — | [Overrides keyed by field name](#by-field-name-fieldoverrides), applied to every type carrying it. A key wrapped in slashes is a pattern; a type-keyed `overrides` entry wins |
 | `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
