@@ -688,11 +688,24 @@ The same primitives the argument engine uses, exported for the cases it can't re
 import { paginate, searchItems } from '@vantreeseba/graphql-mocks';
 
 paginate(mocks.User, { skip: 10, limit: 5 });  // also offset/first/take
-searchItems(mocks.User, 'ana');                // every string field
+searchItems(mocks.User, 'ana');                // every own string field
 searchItems(mocks.User, 'ana', ['name']);      // named fields only
 ```
 
 Absent or null arguments are no-ops, so they're safe to apply unconditionally.
+
+A `searchItems` field is a key, a **dotted path**, or an accessor. Because relations are wired
+into the pool, a path reaches them — and steps through a list on the way, so a post matches when
+any of its comments does:
+
+```ts
+searchItems(mocks.Post, 'ana', ['title', 'author.name', 'comments.text']);
+searchItems(mocks.Post, 'ana', [(post) => post.author?.email]);
+```
+
+A missing link is a non-match, not a throw, so `author.email` is safe on posts with no author.
+Leaving `fields` off keeps the shallow default — every own string-valued property, relations not
+followed — so name the paths when a related object is what you're filtering on.
 
 ## QA mode
 
