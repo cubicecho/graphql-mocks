@@ -25,6 +25,7 @@ export type {
   DeriveContext,
   FieldDeriveFn,
   FieldOverrideFn,
+  FieldOverridesConfig,
   ListSizeConfig,
   MockHelpers,
   MockResult,

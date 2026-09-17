@@ -16,6 +16,7 @@ import {
 } from './apolloMocks.js';
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
+import { expandFieldOverrides } from './fieldOverrides.js';
 import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
 import {
   type OperationMocks,
@@ -453,7 +454,7 @@ function applyDerive(
 }
 
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
-  const resolved = resolveOptions(options);
+  const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
   const { faker, qa, nullChance } = resolved;
 
