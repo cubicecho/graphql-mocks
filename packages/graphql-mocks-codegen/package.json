@@ -1,6 +1,6 @@
 {
   "name": "@vantreeseba/graphql-mocks-codegen",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "GraphQL Code Generator plugin that emits a SchemaTypeMap for typing @vantreeseba/graphql-mocks pools.",
   "type": "module",
   "author": "Benjamin Van Treese <vantreeseba@gmail.com>",

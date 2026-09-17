@@ -1,3 +1,17 @@
+# [3.3.0](https://github.com/cubicecho/graphql-mocks/compare/v3.2.0...v3.3.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **apollo:** type createMockClient's defaultOptions as a deep partial ([163524f](https://github.com/cubicecho/graphql-mocks/commit/163524fd67a2fad0aef535e0a769673cb4402dbf)), closes [#28](https://github.com/cubicecho/graphql-mocks/issues/28)
+* **graphql-mocks:** keep an emptied wrapper list empty under argument matching ([f598e5b](https://github.com/cubicecho/graphql-mocks/commit/f598e5b6f07b891f3c02bba0f1210258a896232b)), closes [#14](https://github.com/cubicecho/graphql-mocks/issues/14) [#26](https://github.com/cubicecho/graphql-mocks/issues/26)
+* **graphql-mocks:** walk mock namespaces cycle-safely ([855b7c3](https://github.com/cubicecho/graphql-mocks/commit/855b7c37df253194d048779711e2e5a87a79285d)), closes [#25](https://github.com/cubicecho/graphql-mocks/issues/25)
+
+
+### Features
+
+* **graphql-mocks:** make countFields a build option, not a QA-only one ([b4030f6](https://github.com/cubicecho/graphql-mocks/commit/b4030f69111cae2aa81ab90b5c44315b8cc65080)), closes [#27](https://github.com/cubicecho/graphql-mocks/issues/27)
+
 # [3.2.0](https://github.com/cubicecho/graphql-mocks/compare/v3.1.0...v3.2.0) (2026-09-16)
 
 
