@@ -25,6 +25,8 @@ import {
 import { qaListLength } from './qa.js';
 import {
   isReciprocal,
+  isRelationFilter,
+  pickFiltered,
   pickRelated,
   reciprocalEnumerable,
   relationBounds,
@@ -518,12 +520,12 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           continue;
         }
 
-        if (typeof spec !== 'function') {
+        if (typeof spec !== 'function' && !isRelationFilter(spec)) {
           instance[fieldName] = pickRelated(targetPool, plan.bounds, isList, faker);
           continue;
         }
 
-        const value = spec({
+        const relationCtx = {
           pool: targetPool,
           faker,
           index,
@@ -531,8 +533,22 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
           typeName: objectType.name,
           fieldName,
           isList,
-        });
+        };
         const site = `${objectType.name}.${fieldName}`;
+
+        if (isRelationFilter(spec)) {
+          instance[fieldName] = pickFiltered(
+            targetPool,
+            spec,
+            plan.bounds,
+            relationCtx,
+            site,
+            faker,
+          );
+          continue;
+        }
+
+        const value = spec(relationCtx);
         instance[fieldName] = coerceFnValue(value, plan, targetPool, faker, site);
       }
     }

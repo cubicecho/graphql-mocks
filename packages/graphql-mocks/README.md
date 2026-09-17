@@ -865,7 +865,7 @@ const mocks = buildMocks(schema, {
 ```
 
 A spec is a number, a `{ min, max }` range, `null` (empty the field), `'all'` (the whole target
-pool), or a function that picks the value outright:
+pool), a `{ size, where }` filter (below), or a function that picks the value outright:
 
 ```ts
 relations: { User: { todos: ({ pool, index }) => pool.filter((t) => t.ownerIndex === index) } }
@@ -873,6 +873,40 @@ relations: { User: { todos: ({ pool, index }) => pool.filter((t) => t.ownerIndex
 
 The function receives `{ pool, faker, index, instance, typeName, fieldName, isList }`, where
 `pool` is the *target* type's pool and `instance` is the owner as built so far.
+
+#### Drawing from part of the pool: `{ size, where }`
+
+A function is the sledgehammer — it has to re-implement the sizing along with the picking. When
+all you want is to *narrow which* objects the field may draw from, give the spec a `where`
+predicate and let the usual sizing do the rest:
+
+```ts
+const mocks = buildMocks(schema, {
+  relations: {
+    Team: { members: { size: { min: 2, max: 4 }, where: (user) => user.isActive === true } },
+    Post: { author: { where: (user) => user.role === 'AUTHOR' } },   // size left to the default
+  },
+});
+```
+
+`where` is called as `(item, ctx)` with the same `ctx` a relation function gets, and anything
+truthy keeps the object. `size` is an ordinary spec — a number, a range, `'all'` or `null` — and
+when it's absent the field is sized exactly as it would have been with no entry at all. Pools
+still grow to meet a `size`, since the filtered draw comes out of the same pool.
+
+- **A `where` that matches nothing throws.** An empty match is nearly always a predicate that
+  doesn't say what its author meant, and wiring `null` for it hands the mistake back much later
+  as an unexplained missing relationship. Where "none" is a legitimate answer, say so with a
+  relation function.
+- **A singular field cycles by the owner's index** (`candidates[index % candidates.length]`)
+  rather than drawing at random, so each owner's assignment is stable across a rebuild and
+  spread across the candidates instead of clustering on one.
+- **On a root field, `where` narrows the pool** rather than picking from it: argument matching,
+  paging and the random pick all then run against the objects the predicate kept. So
+  `relations: { Query: { users: { where: (u) => u.isActive === true } } }` makes the whole
+  `users` field serve active users only, and `users(isActive: false)` matches nothing.
+- An object is only a filter when its `where` is a function; `{ where: 'active' }` is a
+  `TypeError` rather than a range with no bounds.
 
 Lookup goes most specific first: `[type][field]` → `[type]._default` → `_default` → the flat
 top-level form (`relations: 0` empties every relationship in the graph). **Ranges live under a
@@ -1073,7 +1107,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
 | `listSize` | `number \| { min: number, max: number }` | `{ min: 1, max: 5 }` | How many items generated list fields hold, unless a QA `lists` profile or a `relations` entry says otherwise |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
-| `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
+| `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, a `{ size, where }` filter, or a function picking the related objects |
 | `countFields` | `boolean \| { [type]: { [countField]: listField } }` | — | [Pair count scalars with the lists they count](#counts-that-agree-with-their-lists) and size those lists to the pool. A map adds the pairings the name convention misses, and turns the pass on |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |

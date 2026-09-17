@@ -154,8 +154,38 @@ export interface RelationContext {
  */
 export type RelationFn = (ctx: RelationContext) => unknown;
 
-/** A size, or a function that computes the field value outright. */
-export type RelationSpec = RelationSize | RelationFn;
+/**
+ * Which pooled objects a relationship field may draw from. Returns a truthy value to keep one.
+ *
+ * The item is a pooled instance, typed loosely because `relations` keys fields by name and
+ * carries no per-field element type — narrow it yourself where the schema types are to hand.
+ */
+export type RelationPredicate = (item: Record<string, unknown>, ctx: RelationContext) => unknown;
+
+/**
+ * Draw the related objects from only the pooled ones a predicate keeps — the shape that
+ * otherwise drops straight to a {@link RelationFn} and re-implements the sizing along with it:
+ *
+ * ```ts
+ * relations: {
+ *   Order: { shippingMethod: { where: (m) => m.isActive } },
+ *   Post: { comments: { size: 3, where: (c) => !c.isSpam } },
+ * }
+ * ```
+ *
+ * A predicate that matches nothing throws: an empty candidate set is a statement the pool
+ * cannot satisfy, and left alone it surfaces much later as an unexplained null. Where "none"
+ * is a legitimate answer, say so with a {@link RelationFn}.
+ */
+export interface RelationFilter {
+  /** How many to draw from the candidates. Sized like any other relation when omitted. */
+  size?: RelationSize;
+  /** Keeps the pooled objects this field may draw from. */
+  where: RelationPredicate;
+}
+
+/** A size, a filtered draw, or a function that computes the field value outright. */
+export type RelationSpec = RelationSize | RelationFilter | RelationFn;
 
 // Relationship specs for one type, keyed by field name, with a `_default` for that type's
 // other relationship fields. Degrades to a loose record when the type's shape is unknown,
