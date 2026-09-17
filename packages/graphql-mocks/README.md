@@ -489,7 +489,8 @@ for the client itself. Two defaults are worth knowing about, both overridable:
 - **`fetchPolicy: 'no-cache'` and `errorPolicy: 'all'`** for `query` and `watchQuery`. The point
   of a mock client is to see what the mocks return, and an error state is a state to render, not
   a rejected promise nobody catches. `defaultOptions` merges over these per operation kind and
-  then per key, so `{ query: { fetchPolicy: 'cache-first' } }` keeps the rest.
+  then per key, so `{ query: { fetchPolicy: 'cache-first' } }` keeps the rest — it is a deep
+  partial, and `{ mutate: { errorPolicy: 'all' } }` on its own is a whole valid value.
 
 Pass a *factory* — `(options) => buildMocks(schema, { ...defaults, ...options })` — instead of a
 built graph when something downstream needs to rebuild the graph with different options. Graphs
