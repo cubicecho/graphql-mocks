@@ -1,3 +1,4 @@
+import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { Kind, parse } from 'graphql';
 import { describe, expect, it } from 'vitest';
 import { buildMocks } from './mockSchema.js';
@@ -97,6 +98,16 @@ describe('toPlain', () => {
     expect(() => JSON.stringify(mocks.at('User', 0))).toThrow();
     expect(() => JSON.stringify(toPlain(mocks.at('User', 0)))).not.toThrow();
   });
+
+  it('returns the type it was handed', () => {
+    const user = { id: 'User-0', name: 'Ada', todos: [{ id: 'Todo-0' }] };
+    // The annotation is the assertion: `toPlain` used to return `unknown`, so this line is
+    // what `npm run typecheck:tests` fails on if the return type is widened again.
+    const copy: typeof user = toPlain(user);
+    expect(copy).toEqual(user);
+    expect(copy).not.toBe(user);
+    expect(copy.todos[0]).not.toBe(user.todos[0]);
+  });
 });
 
 describe('select', () => {
@@ -192,6 +203,18 @@ describe('select', () => {
     const projected = select(mocks.at('User', 0), document) as Record<string, unknown>;
     expect(Object.keys(projected).sort()).toEqual(['id', 'name', 'todos']);
     expect(() => JSON.stringify(projected)).not.toThrow();
+  });
+
+  it('infers its result from a TypedDocumentNode', () => {
+    const document = parse('query U { id name }') as TypedDocumentNode<
+      { id: string; name: string },
+      Record<string, never>
+    >;
+    // No cast and no explicit type argument: reading `.name` as a string is what breaks under
+    // `typecheck:tests` if the document parameter goes back to a bare `DocumentNode`.
+    const row = select(user, document);
+    const name: string = row.name;
+    expect(name).toBe('Ada');
   });
 });
 

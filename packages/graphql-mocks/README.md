@@ -653,14 +653,16 @@ copying. `onCycle` says what the cut looks like — `'stub'` (the default) leave
 `{ __typename, id }`, `'null'` leaves `null`, `'omit'` drops the property (array *entries* still
 become `null`, since dropping one would shift the indices after it). `maxDepth` cuts at a fixed
 depth with the same strategy. An object that merely appears twice is copied twice; only a real
-cycle is cut.
+cycle is cut. The result is typed as the input — true of the ordinary copy, though a cut narrows
+the shape below that, so widen it yourself when you cut deliberately.
 
 `select(value, document, options?)` projects onto a query, mutation or bare fragment document:
 the fields it asks for, under the aliases it asks for them, and nothing else. Because the shape
 follows the document rather than the object graph, the result is cycle-free by construction —
 which is usually what you wanted anyway. Pass `{ schema }` when a fragment's type condition is an
 interface or union, and `{ operationName }` to pick between operations. `@skip` / `@include` are
-not evaluated.
+not evaluated. Hand it a `TypedDocumentNode` and the return type comes from the document, the
+same way `dataForOperation` infers it.
 
 There is also `relations: { _reciprocal: 'hidden' }`, which wires the mirrored back-references as
 **non-enumerable** properties: `todo.user` still reads normally, but `JSON.stringify` and
@@ -883,8 +885,10 @@ Notes:
 ### Named scenarios
 
 A scenario is a named partial `buildMocks` config. `defineScenarios` is an identity function that
-keeps the literal keys; `satisfies ScenarioMap<SchemaTypeMap>` adds schema-checked type and field
-names.
+keeps the literal keys. To check type and field names against a schema too, bind it to a type map
+first — `defineScenarios<SchemaTypeMap>()({ … })` — or write the same check the other way round
+with `satisfies ScenarioMap<SchemaTypeMap>`. The currying is what keeps both halves: TypeScript
+can't infer the scenario map while you supply the type map by hand.
 
 ```ts
 import { buildMocks, defineScenarios } from '@vantreeseba/graphql-mocks';
@@ -911,7 +915,10 @@ buildMocks(schema, { scenario: [scenarios.newUser, scenarios.offline], count: 3,
 ```
 
 `composeScenarios(a, b)` does the same fold eagerly and hands back an ordinary scenario, so it can
-be composed further. Maps merge key by key — `count` per type, `overrides` and `relations` per
+be composed further. `composeScenarios<SchemaTypeMap>(a, b)` checks every piece against that map
+and stays bound to it, so a scenario written for another schema can't quietly join the fold; the
+map is never inferred from the arguments, since inferring it from the first scenario would make
+every later one conform to whatever types that one happened to mention. Maps merge key by key — `count` per type, `overrides` and `relations` per
 type then per field, `scalars` by scalar name, `qa` per dimension — and everything else is
 last-one-wins. `faker` and `seed` are build-level only; reproducibility stays the caller's.
 

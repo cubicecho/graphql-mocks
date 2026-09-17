@@ -9,6 +9,14 @@ import type { Scenario } from './types.js';
 // fields because `faker.date.recent()` is wall-clock relative. Same helper as qaSets.test.ts.
 const CLOCK_RELATIVE = new Set(['createdAt', 'dueDate', 'publishedAt']);
 
+/**
+ * Stands in for a codegen `SchemaTypeMap`. A type alias, not an interface: an interface has no
+ * implicit index signature, so it would not satisfy the `Record<string, unknown>` constraint —
+ * and extending `Record<string, unknown>` to get one would make every type name legal again,
+ * which is exactly what the binding is supposed to stop.
+ */
+type TestTypes = { User: { name: string; todos: unknown; posts: unknown } };
+
 const scalarFields = (items: unknown[] | undefined) =>
   JSON.stringify(
     ((items ?? []) as Record<string, unknown>[]).map((item) =>
@@ -154,6 +162,27 @@ describe('defineScenarios', () => {
     expect(Object.keys(scenarios)).toEqual(['newUser', 'powerUser']);
     expect(scenarios.newUser.description).toBe('nothing yet');
   });
+
+  it('binds to a type map when called with one and no arguments', () => {
+    const scenarios = defineScenarios<TestTypes>()({
+      newUser: { relations: { User: { todos: null } } },
+      loud: { overrides: { User: { name: () => 'Ada' } } },
+    });
+    expect(Object.keys(scenarios)).toEqual(['newUser', 'loud']);
+    // The literal keys survived the binding. A plain `ScenarioMap` would carry an index
+    // signature and accept this, and then the directive itself is what fails typecheck:tests.
+    // @ts-expect-error
+    expect(scenarios.typo).toBeUndefined();
+  });
+
+  it('checks type and field names against the bound map', () => {
+    const define = defineScenarios<TestTypes>();
+    const scenarios = define({
+      // @ts-expect-error — `Post` is not a key of TestTypes, which is the point of binding it.
+      bad: { relations: { Post: { comments: 1 } } },
+    });
+    expect(Object.keys(scenarios)).toEqual(['bad']);
+  });
 });
 
 describe('composeScenarios', () => {
@@ -174,6 +203,20 @@ describe('composeScenarios', () => {
     expect(composeScenarios(base, { count: 4 })).toEqual({
       count: 4,
       relations: { User: { todos: 1 } },
+    });
+  });
+
+  it('keeps a type map across the composition', () => {
+    const base: Scenario<TestTypes> = { relations: { User: { todos: 1 } } };
+    // The type argument checks every piece and rides through to the result, which is what a
+    // later `buildMocks<TestTypes>` needs; without it the map was dropped at the first merge.
+    const composed = composeScenarios<TestTypes>(base, {
+      overrides: { User: { name: () => 'x' } },
+    });
+    const still: Scenario<TestTypes> = composed;
+    expect(still).toEqual({
+      relations: { User: { todos: 1 } },
+      overrides: { User: { name: expect.any(Function) } },
     });
   });
 });
