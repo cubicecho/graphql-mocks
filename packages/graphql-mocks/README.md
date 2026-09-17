@@ -768,7 +768,9 @@ For a single story, the [decorator](#the-storybook-decorator) takes a profile di
 
 Each set is generated from its own faker instance seeded with `seed`, so a set reproduces
 identically no matter which other presets ran alongside it — when one variant breaks, rerunning
-just that preset gives you the same data back.
+just that preset gives you the same data back. That holds even when you hand it the same options
+object you hand `buildMocks`: a `faker` in there contributes its locale data and is never drawn
+from or re-seeded, so there is nothing to strip out first.
 
 ### Count fields stay in step with their lists
 
@@ -928,7 +930,8 @@ export const Variants = cells.map((cell) => ({
 Either axis may be omitted; `qaPresets` also takes a map (`{ baseline: false, huge: { lists:
 'huge' } }`) when you want your own cell names. Each cell gets its own faker seeded from `seed`,
 so a cell reproduces identically no matter which other cells were requested — `seedPerCell: true`
-opts out when you'd rather the cells differ. With `stableIds`, each cell's ids are prefixed with a
+opts out when you'd rather the cells differ. A `faker` you pass contributes its locale data only;
+it is never drawn from or re-seeded, so reproducibility rests on `seed`. With `stableIds`, each cell's ids are prefixed with a
 slug of its name so pools from different cells don't collide; set `idPrefix` yourself to override.
 
 `buildQaSets` is the QA-only shorthand for the same engine.
