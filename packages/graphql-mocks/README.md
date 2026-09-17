@@ -4,6 +4,10 @@ Generate realistic, graph-connected mock data from a GraphQL schema using faker.
 
 Relationships are wired as actual object references — `todo.user` is the same object as `mocks.User[i]`, not a copy. Useful for tests, Storybook stories, and demos.
 
+This README is the reference: every option, every export, in full. For the guided
+path through it — install, first pool, rendering a component against it, typing the
+pools — start with [How to use this library](https://github.com/cubicecho/graphql-mocks/blob/main/docs/getting-started.md).
+
 ## Install
 
 ```bash
@@ -689,6 +693,7 @@ searchItems(mocks.User, 'ana', ['name']);      // named fields only
 ```
 
 Absent or null arguments are no-ops, so they're safe to apply unconditionally.
+
 ## QA mode
 
 Mocks are realistic by default, and realistic data never finds the bug where a 400-character
@@ -1033,6 +1038,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `listSize` | `number \| { min: number, max: number }` | `{ min: 1, max: 5 }` | How many items generated list fields hold, unless a QA `lists` profile or a `relations` entry says otherwise |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, or a function picking the related objects |
+| `countFields` | `boolean \| { [type]: { [countField]: listField } }` | — | [Pair count scalars with the lists they count](#counts-that-agree-with-their-lists) and size those lists to the pool. A map adds the pairings the name convention misses, and turns the pass on |
 | `scenario` | `Scenario \| Scenario[]` | — | [Scenario layers](#named-scenarios) to build on, applied left to right with these options last |
 | `matchArguments` | `boolean \| ArgMatchingOptions` | `false` | Let field arguments select data — see [Argument matching](#argument-matching) |
 | `argOverrides` | `ArgOverride[]` | `[]` | Answer one field by its argument values — see [Selections that differ only by an argument](#selections-that-differ-only-by-an-argument) |

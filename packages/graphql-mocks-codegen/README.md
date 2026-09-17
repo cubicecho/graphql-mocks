@@ -6,6 +6,9 @@ in your schema — so you can hand it to
 [`@vantreeseba/graphql-mocks`](../graphql-mocks)'s `buildMocks<TTypes>` and get
 typed mock pools back without a cast.
 
+New to the runtime? [How to use this library](https://github.com/cubicecho/graphql-mocks/blob/main/docs/getting-started.md)
+covers where the type map fits in.
+
 ## Install
 
 ```bash

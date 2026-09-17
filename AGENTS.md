@@ -18,6 +18,12 @@ The codegen plugin closes the typing loop: it generates a `SchemaTypeMap` from t
 Each package's API contract and options are documented in its own README:
 [`packages/graphql-mocks/README.md`](./packages/graphql-mocks/README.md) and
 [`packages/graphql-mocks-codegen/README.md`](./packages/graphql-mocks-codegen/README.md).
+[`docs/getting-started.md`](./docs/getting-started.md) is the guided path through the
+runtime README; [`CONTRIBUTING.md`](./CONTRIBUTING.md) covers working on the repo.
+
+**Changing the public API means changing four files**, not one: the package README
+(reference), `docs/getting-started.md` (only if it changes the guided path), `llms.txt`
+(the API list and examples) and `context7.json` (the `rules` array).
 
 ## Stack
 
@@ -40,15 +46,20 @@ packages/
       mockSchema.ts           — main buildMocks() function
       scalarMockers.ts        — default scalar → faker mapping
       typeMocker.ts           — per-type field mock generator
-      graphBuilder.ts         — assembles cross-type relationships into a graph
-      executeOperation.ts     — runs an operation against the graph (dataForOperation)
+      graphBuilder.ts         — relationship wiring, reciprocal mirroring, count sync, derive
+      executeOperation.ts     — runs an operation against the graph (dataForOperation),
+                                including wrapper/connection unwrapping
       argMatching.ts          — opt-in interpretation of field arguments
+      countFields.ts          — pairs count scalars with the lists they count
       collection.ts           — paginate/searchItems array primitives
+      plain.ts                — toPlain()/select(): cycle-safe views of pooled objects
+      validateMocks.ts        — checks for Apollo mock shapes that fail silently
       apolloMocks.ts          — Apollo MockedProvider mock builders (mockOperation)
       requestHandler.ts       — graph-backed handler answering any operation
       mockScenarios.ts        — default/loading/errored handler options
       operationsFrom.ts       — variants keyed by a document module's exports
-      apollo/index.ts         — ./apollo subpath: mockLink (optional @apollo/client peer)
+      apollo/index.ts         — ./apollo subpath: mockLink, createMockClient,
+                                withGraphqlMocks (optional @apollo/client peer)
       qa.ts                   — QA mode: presets, weird-value corpora, resolution helpers
       qaSets.ts               — buildQaSets(): one mock pool per QA preset
       resolveOptions.ts       — folds every option into the one shape the generator consumes
@@ -63,6 +74,9 @@ packages/
     src/index.ts              — plugin + validate; emits the SchemaTypeMap
     test/plugin.test.ts       — tests live in test/
 
+docs/getting-started.md       — "how to use this library" guide
+CONTRIBUTING.md               — setup, commands, conventions, git workflow, releases
+llms.txt, context7.json       — machine-readable docs; keep in step with the READMEs
 biome.json, .releaserc.json   — repo-wide config at the root
 package.json                  — workspaces root (private, not published)
 ```
