@@ -4,8 +4,15 @@ import { buildMocks } from './mockSchema.js';
 import { schema } from './test/schema.js';
 import type { BuildMocksOptions } from './types.js';
 
-const build = (options: BuildMocksOptions = {}) =>
-  buildMocks(schema, { seed: 3, count: 2, ...options });
+/**
+ * The pools these tests read from. Naming them keeps `mocks.User[0]` typed: the bare
+ * `MockResult` only carries an index signature, which `noUncheckedIndexedAccess` widens to
+ * `unknown[] | undefined`.
+ */
+type Pools = Record<'User' | 'Todo' | 'Post' | 'Comment', Record<string, unknown>>;
+
+const build = (options: BuildMocksOptions<Pools> = {}) =>
+  buildMocks<Pools>(schema, { seed: 3, count: 2, ...options });
 
 describe('fieldOverrides', () => {
   it('applies one entry to every type carrying that field name', () => {
