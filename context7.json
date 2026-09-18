@@ -9,6 +9,7 @@
     "buildMocks(schema, options?) is the runtime entry point; it accepts a GraphQLSchema or an SDL string and returns a MockResult keyed by object-type name.",
     "Relationships are wired as actual object references: todo.user is the same object as mocks.User[i], not a copy. Circular references resolve to already-generated objects, so a pool is not JSON-serializable.",
     "Pools are unknown[] by default. Pass a TTypes map (buildMocks<{ User: User }>(schema)) or a generated SchemaTypeMap to get typed pools without a cast.",
+    "In overrides and derive the TTypes map is a hint, not a closed contract: type names are checked against it, but a field the map does not carry (one a fragment did not select, or a mock-only computed field) is accepted with an unknown return, and a derive's self stays typed. The trade is that a misspelled field name reads as an unmapped one. MockResult is unchanged: pooled instances are typed by the map alone.",
     "Use the @vantreeseba/graphql-mocks-codegen plugin to auto-generate the SchemaTypeMap from a schema; run it alongside the standard typescript plugin in codegen.ts.",
     "Determinism comes from the seed option; override and scalar functions receive the generator's seeded faker instance, so do not import a separate faker for them.",
     "Default counts are 5 per type; scalar list fields generate 1-3 items and relationship list fields use listSize (default 1-5). Unknown scalars fall back to faker.lorem.word() with a console.warn.",
