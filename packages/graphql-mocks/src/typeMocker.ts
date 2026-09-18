@@ -7,8 +7,8 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
-import { qaFallbackText, qaListLength } from './qa.js';
-import type { ResolvedOptions } from './resolveOptions.js';
+import { qaFallbackText } from './qa.js';
+import { type ResolvedOptions, listSizeFor } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
 
 export interface UnwrappedType {
@@ -60,7 +60,6 @@ export function mockTypeScalars(
   const result: Record<string, unknown> = {};
   const { faker, qa, qaScalars, nullChance } = resolved;
   const typeOverrides = resolved.overrides[typeDef.name] ?? {};
-  const listLength = qaListLength(qa, { min: 1, max: 3 });
 
   for (const [fieldName, field] of Object.entries(fields)) {
     if (typeOverrides[fieldName]) {
@@ -82,6 +81,10 @@ export function mockTypeScalars(
       result[fieldName] = null;
       continue;
     }
+
+    // Sized per field rather than once per type: a `listSize` entry can name this exact field,
+    // and the same lookup sizes relationship and root lists, so one lever reaches all three.
+    const listLength = listSizeFor(typeDef.name, fieldName, resolved);
 
     if (isEnumType(namedType)) {
       const values = namedType.getValues();

@@ -241,6 +241,20 @@ rest of the object — a total, an assembled name, a difference — belongs in
 or a function that picks from `ctx.pool`; it reaches root fields through the
 operation type (`{ Query: { users: 3 } }`), and pools grow to meet demand.
 
+`relations` only reaches relationship fields. To size a list of scalars or enums
+— `tags: [String!]!`, `colours: [Colour!]!` — use `listSize`, which takes the
+same per-type, per-field shape and sizes *every* list in the graph:
+
+```ts
+buildMocks(schema, {
+  listSize: { Post: { tags: 2, _default: 4 }, _default: { min: 1, max: 5 } },
+});
+```
+
+A flat `listSize: 3` or `listSize: { min: 2, max: 4 }` still covers everything.
+A named entry beats the QA `lists` profile; a `relations` entry beats both for a
+relationship field. `listSize` never grows a pool — raise `count` for that.
+
 For wrapper and connection types, `countFields: true` pairs each count scalar
 with the list it counts and sizes that list to the pool, so `totalCount` is a
 total of something a pager can actually page through:

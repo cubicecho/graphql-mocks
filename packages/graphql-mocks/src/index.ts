@@ -35,6 +35,7 @@ export type {
   FieldOverrideFn,
   FieldOverridesConfig,
   ListSizeConfig,
+  ListSizeRangeConfig,
   MockHelpers,
   MockResult,
   OverrideContext,

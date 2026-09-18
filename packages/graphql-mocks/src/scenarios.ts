@@ -1,5 +1,13 @@
+import { isListSizeRange } from './helpers.js';
 import { expandQaOption, qaScalarMockers, resolveQa } from './qa.js';
-import type { BuildMocksOptions, CountConfig, QaOption, Scenario, ScenarioMap } from './types.js';
+import type {
+  BuildMocksOptions,
+  CountConfig,
+  ListSizeConfig,
+  QaOption,
+  Scenario,
+  ScenarioMap,
+} from './types.js';
 
 /** Anything merged here is a partial build config; `description` rides along untouched. */
 type Layer = Record<string, unknown>;
@@ -13,6 +21,19 @@ function mergeCount(base: CountConfig | undefined, next: CountConfig): CountConf
   if (typeof next === 'number' || base === undefined) return next;
   if (typeof base === 'number') return { _default: base, ...next };
   return { ...base, ...next };
+}
+
+/**
+ * A flat size replaces outright; a map merges per type then per field, promoting an earlier
+ * flat size to `_default` so it still covers the types the later map does not name.
+ */
+function mergeListSize(
+  base: ListSizeConfig | undefined,
+  next: ListSizeConfig,
+): ListSizeConfig | undefined {
+  if (isListSizeRange(next) || base === undefined) return next;
+  if (isListSizeRange(base)) return { _default: base, ...(next as Layer) } as ListSizeConfig;
+  return mergeTwoLevel(base, next) as ListSizeConfig;
 }
 
 /**
@@ -89,6 +110,12 @@ export function mergeScenarios<TTypes extends Record<string, unknown> = Record<s
         case 'qa':
           merged.qa = mergeQa(merged.qa as QaOption | undefined, value as QaOption);
           qaAt = index;
+          break;
+        case 'listSize':
+          merged.listSize = mergeListSize(
+            merged.listSize as ListSizeConfig | undefined,
+            value as ListSizeConfig,
+          );
           break;
         case 'scalars':
           merged.scalars = { ...(merged.scalars as Layer), ...(value as Layer) };

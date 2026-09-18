@@ -368,10 +368,13 @@ describe('relations reciprocity', () => {
 
   it('points every related object back at its owner when opted in', () => {
     const warn = quiet();
+    // One user on purpose. Mirroring is documented as lossy where an object is shared by two
+    // owners — last writer wins — so asserting this over several users would be asserting that
+    // no two of them happened to draw the same todo, which is luck, not the feature.
     const mocks = buildMocks(schema, {
       seed: 1,
-      count: 3,
-      relations: { User: { todos: 1 }, _reciprocal: true },
+      count: { User: 1, Todo: 5 },
+      relations: { User: { todos: 2 }, _reciprocal: true },
     });
     for (const user of mocks.User as Record<string, unknown>[]) {
       for (const todo of user.todos as Record<string, unknown>[]) {
