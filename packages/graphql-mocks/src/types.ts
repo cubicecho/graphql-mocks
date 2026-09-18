@@ -62,16 +62,27 @@ export type CountConfig<TTypes extends Record<string, unknown> = Record<string, 
 
 // Field-level overrides for a single type. When the type's shape is `unknown` (the default,
 // untyped case) this degrades to a loose `Record<string, FieldOverrideFn>`, preserving the
-// pre-`TTypes` behavior; when concrete, each field name is checked and its override return
-// type is bound to the field's type.
+// pre-`TTypes` behavior; when concrete, each mapped field name is checked and its override
+// return type is bound to the field's type.
+//
+// The trailing index signature is what makes the map a hint rather than a closed contract: a
+// field the map does not carry — one a fragment did not select, or one that exists only in the
+// mock — is still accepted, with an `unknown` return. Without it, writing a single such field
+// forced the whole options object back to the untyped default, which gave up the typing on
+// every field that *was* in the map. It also switches excess-property checking off for these
+// objects, so a misspelled field name no longer errors here; that is the trade.
 type FieldOverrides<T> = unknown extends T
   ? Record<string, FieldOverrideFn>
-  : { [F in keyof T]?: FieldOverrideFn<T[F]> };
+  : { [F in keyof T]?: FieldOverrideFn<T[F]> } & Record<string, FieldOverrideFn>;
 
 /**
  * Per-type, per-field override map. With a `TTypes` map, both the type name and field name
  * autocomplete and each override's return type is bound to the field's type; without it, any
  * type/field name is accepted with an `unknown` return.
+ *
+ * Type names are checked against the map; field names are a hint. A field the map does not
+ * carry is accepted with an `unknown` return, so one mock-only field does not cost the typing
+ * on all the others.
  */
 export type OverridesConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
   [K in keyof TTypes]?: FieldOverrides<TTypes[K]>;
@@ -138,15 +149,21 @@ export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = (
   ctx: DeriveContext,
 ) => T;
 
-// Derives for a single type, degrading to a loose record when the shape is unknown, the same
-// way `FieldOverrides` does.
+// Derives for a single type, degrading to a loose record when the shape is unknown, and
+// treating the map as a hint for the rest, the same way `FieldOverrides` does. The fallback
+// keeps `self` bound to the owning type and only loosens the return, which is the case a
+// derive is usually reaching for: a total rolled up from fields that *are* in the map.
 type FieldDerives<T> = unknown extends T
   ? Record<string, FieldDeriveFn>
-  : { [F in keyof T]?: FieldDeriveFn<T, T[F]> };
+  : { [F in keyof T]?: FieldDeriveFn<T, T[F]> } & Record<string, FieldDeriveFn<T>>;
 
 /**
  * Per-type, per-field derive map. With a `TTypes` map, type and field names autocomplete,
  * `self` is the owning type, and each derive's return type is bound to the field's type.
+ *
+ * Type names are checked against the map; field names are a hint. A derive may write a field
+ * the map does not carry — a rolled-up total, a display string no query selects — and `self`
+ * stays typed while that field's return falls back to `unknown`.
  */
 export type DeriveConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
   [K in keyof TTypes]?: FieldDerives<TTypes[K]>;

@@ -1234,3 +1234,24 @@ const derive: DeriveConfig<SchemaTypeMap> = {
 
 buildMocks<SchemaTypeMap>(schema, { derive });
 ```
+
+The map is a **hint, not a closed contract**. Type names are checked against it, but a field it
+does not carry — one the fragment behind the generated type never selected, or one that exists
+only in the mock — is still accepted, with an `unknown` return:
+
+```ts
+const derive: DeriveConfig<SchemaTypeMap> = {
+  User: {
+    fullName: (self) => `${self.firstName} ${self.lastName}`,  // mapped: bound to its type
+    todoCount: (self) => self.todos.length,                    // not in the map: `unknown`
+  },
+};
+```
+
+`self` stays typed either way, so a rolled-up total reads its inputs with autocomplete even
+though the field it writes is unmapped. Before this, writing one such field meant dropping
+`TTypes` from the whole options object, at which point `self` degraded to
+`Record<string, unknown>` and nothing was typed at all. The trade is that a *misspelled* field
+name no longer errors in these two options — it reads as an unmapped field. Type names still
+catch their own typos, and `MockResult` is unchanged: a pooled instance is typed by the map
+alone, so reading a mock-only field back is an explicit cast.
