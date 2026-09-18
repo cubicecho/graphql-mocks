@@ -18,13 +18,12 @@ import {
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { expandFieldOverrides } from './fieldOverrides.js';
-import { OPERATION_TYPE_NAMES, resolveCount } from './helpers.js';
+import { OPERATION_TYPE_NAMES, resolveCount, validateListSize } from './helpers.js';
 import {
   type OperationMocks,
   type OperationModule,
   buildOperationMocks,
 } from './operationsFrom.js';
-import { qaListLength } from './qa.js';
 import {
   isReciprocal,
   isRelationFilter,
@@ -41,7 +40,7 @@ import {
   type MockRequestHandler,
   createRequestHandler,
 } from './requestHandler.js';
-import { type ResolvedOptions, resolveOptions } from './resolveOptions.js';
+import { type ResolvedOptions, listSizeFor, resolveOptions } from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, FieldDeriveFn, MockResult, RelationSpec } from './types.js';
 
@@ -167,7 +166,7 @@ function planRelationFields(
     // An explicit `relations` entry is the more specific lever and still decides the size.
     const relation = resolveRelation(objectType.name, fieldName, resolved.relations);
     const spec = relation === undefined && isList && counted.has(fieldName) ? 'all' : relation;
-    const fallback = isList ? qaListLength(resolved.qa, resolved.listSize) : SINGULAR_BOUNDS;
+    const fallback = isList ? listSizeFor(objectType.name, fieldName, resolved) : SINGULAR_BOUNDS;
     const plan = { fieldName, isRequired, isList, spec, bounds: relationBounds(spec, fallback) };
 
     if (isObjectType(namedType)) {
@@ -457,6 +456,7 @@ function applyDerive(
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
+  validateListSize(schema, resolved.listSizes);
   validateAliases(schema, resolved.aliases);
   const { faker, qa, nullChance } = resolved;
 

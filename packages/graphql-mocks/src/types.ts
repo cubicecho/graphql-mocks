@@ -15,9 +15,39 @@ import type { MockHandlerOptions, MockRequestHandler } from './requestHandler.js
 export type ScalarMocker = (faker: Faker) => unknown;
 
 /**
- * Size of generated list fields: a bare number for an exact length, or an inclusive range.
+ * A list length: a bare number for an exact length, or an inclusive range.
  */
-export type ListSizeConfig = number | { min: number; max: number };
+export type ListSizeRangeConfig = number | { min: number; max: number };
+
+// Sizes for one type's list fields, keyed by field name, with a `_default` for that type's
+// other lists. Degrades to a loose record when the type's shape is unknown, mirroring
+// `TypeRelations`.
+type TypeListSizes<T> = unknown extends T
+  ? { _default?: ListSizeRangeConfig } & Record<string, ListSizeRangeConfig>
+  : { _default?: ListSizeRangeConfig } & { [F in keyof T]?: ListSizeRangeConfig };
+
+/** The untyped `listSize` map: any type name, any field name. */
+export interface LooseListSizeMap {
+  /** Applies to any list field without a type- or field-level entry. */
+  _default?: ListSizeRangeConfig;
+  [typeName: string]: TypeListSizes<unknown> | ListSizeRangeConfig | undefined;
+}
+
+/** The `listSize` map when a `TTypes` map is supplied: type and field names are checked. */
+export type TypedListSizeMap<TTypes extends Record<string, unknown>> = {
+  _default?: ListSizeRangeConfig;
+} & { [K in keyof TTypes]?: TypeListSizes<TTypes[K]> | ListSizeRangeConfig };
+
+/**
+ * How long generated list fields are, resolved per field as
+ * `[type][field]` → `[type]._default` → `_default` → the flat form.
+ *
+ * A bare `{ min, max }` is the flat form, not a type map — the two are told apart by those
+ * numeric bounds, which no GraphQL type name can collide with under the usual capitalization.
+ */
+export type ListSizeConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> =
+  | ListSizeRangeConfig
+  | (string extends keyof TTypes ? LooseListSizeMap : TypedListSizeMap<TTypes>);
 
 /** Where an override is firing — the instance's position in its pool, and the field's site. */
 export interface OverrideContext {
@@ -432,13 +462,27 @@ export interface BuildMocksOptions<
    */
   nullChance?: number;
   /**
-   * Size of generated list fields — both wired relationship lists and root list fields
-   * resolved by `dataForOperation`. Raise it when a query pages through more than a handful
-   * of items; the pool must also be large enough (see `count`), since lists are sampled
-   * without replacement.
+   * Size of generated list fields — scalar and enum lists, wired relationship lists, and root
+   * list fields resolved by `dataForOperation`. A flat size covers every list; a map sizes one
+   * type, or one field:
+   *
+   * ```ts
+   * buildMocks(schema, { listSize: { min: 2, max: 4 } });   // every list
+   * buildMocks(schema, { listSize: { Post: { tags: 3 } } }); // just Post.tags
+   * buildMocks(schema, { listSize: { Query: { users: 10 } } }); // a root list
+   * ```
+   *
+   * Resolved most specific first — `[type][field]` → `[type]._default` → `_default` → the flat
+   * form. An entry naming a type is a deliberate statement about that type, so it wins over a
+   * QA `lists` profile; the catch-all forms lose to one. A `relations` entry is more specific
+   * still and wins over both for a relationship field.
+   *
+   * Unlike `relations`, this never grows a pool: relationship lists are sampled without
+   * replacement, so a size above the target type's `count` is clamped to the pool.
+   *
    * @default { min: 1, max: 5 }
    */
-  listSize?: ListSizeConfig;
+  listSize?: ListSizeConfig<TTypes>;
   /**
    * Custom scalar mockers. Merged over the built-in defaults; user wins on conflicts.
    * Key is the scalar name as it appears in the schema.

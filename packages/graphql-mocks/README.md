@@ -368,7 +368,7 @@ Only fields the caller actually named are replaced; everything else stays genera
 - A **non-null singular** field always falls back, whatever `onMiss` says — `null` there is a GraphQL error plus a warning, which is strictly worse than a random item.
 - **Paging** never falls back: `skip: 100` over 5 items legitimately yields `[]`.
 
-Paging switches the source from a random subset to the whole pool in stable order, so pages line up. Pools hold `count` items (default 5) and lists draw `listSize` items (default 1–5) — raise both when you need more than one page:
+Paging switches the source from a random subset to the whole pool in stable order, so pages line up. Pools hold `count` items (default 5) and lists draw [`listSize`](#listsize) items (default 1–5) — raise both when you need more than one page:
 
 ```ts
 buildMocks(schema, { count: 50, listSize: { min: 10, max: 20 }, matchArguments: true });
@@ -1048,6 +1048,41 @@ Notes:
   only point at one owner, and the last write wins. `'hidden'` instead of `true` defines those
   back-references non-enumerable — see [Pooled objects are cyclic](#pooled-objects-are-cyclic).
 
+### `listSize`
+
+`relations` only reaches relationship fields. `listSize` sizes **every** generated list — a
+`[String!]!` of tags, a `[Colour!]!` of enums, a relationship list, a root list — and takes the
+same per-type, per-field shape:
+
+```ts
+const mocks = buildMocks(schema, {
+  listSize: {
+    Post: { tags: 2, colours: { min: 1, max: 2 }, _default: 4 }, // exact size, or a range
+    Query: { posts: 3 },                                         // root fields too
+    _default: { min: 1, max: 5 },                                // everything else
+  },
+});
+```
+
+The flat form is still there and still means "every list in the graph": `listSize: 3` or
+`listSize: { min: 2, max: 4 }`. **A bare `{ min, max }` is a range, not a map** — the two are told
+apart by those numeric bounds, which no GraphQL type name collides with under the usual
+capitalization.
+
+Lookup goes most specific first: `[type][field]` → `[type]._default` → `_default` → the flat form.
+
+Notes:
+
+- **A named entry beats the QA `lists` profile**; the catch-all (`_default`, or the flat form)
+  loses to it. Same rule as `relations`: the per-field lever is the more specific one.
+- **`relations` is more specific still** and wins outright for a relationship field — it can do
+  things `listSize` can't (`'all'`, `where`, a picker function, `null`).
+- **`listSize` never grows a pool.** A relationship or root list is drawn without replacement from
+  a pool of `count` objects, so `{ Query: { posts: 50 } }` against the default `count: 5` yields
+  five. Raise `count` too. (`relations` *does* grow pools; that asymmetry is deliberate.)
+- Config errors throw rather than silently doing nothing: an unknown type, an unknown field, or an
+  entry on a field that isn't a list is a `TypeError`.
+
 ### Named scenarios
 
 A scenario is a named partial `buildMocks` config. `defineScenarios` is an identity function that
@@ -1226,7 +1261,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
 | `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
-| `listSize` | `number \| { min: number, max: number }` | `{ min: 1, max: 5 }` | How many items generated list fields hold, unless a QA `lists` profile or a `relations` entry says otherwise |
+| `listSize` | `number \| { min, max } \| { [type]: { [field]: size } }` | `{ min: 1, max: 5 }` | How many items every generated list field holds — scalar, enum, relationship and root alike. Per-type/per-field entries beat a QA `lists` profile; a `relations` entry beats both. See [`listSize`](#listsize) |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, a `{ size, where }` filter, or a function picking the related objects |
 | `countFields` | `boolean \| { [type]: { [countField]: listField } }` | — | [Pair count scalars with the lists they count](#counts-that-agree-with-their-lists) and size those lists to the pool. A map adds the pairings the name convention misses, and turns the pass on |

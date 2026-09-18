@@ -1,7 +1,14 @@
 import type { Faker } from '@faker-js/faker';
 import type { ArgMatchingOptions } from './argMatching.js';
-import { type ListSizeRange, resolveFaker, resolveListSize } from './helpers.js';
-import { type ResolvedQa, qaDefaultCount, qaNullChance, qaScalarMockers, resolveQa } from './qa.js';
+import { type ListSizeRange, lookupListSize, resolveFaker, resolveListSize } from './helpers.js';
+import {
+  type ResolvedQa,
+  qaDefaultCount,
+  qaListLength,
+  qaNullChance,
+  qaScalarMockers,
+  resolveQa,
+} from './qa.js';
 import { applyScenarios } from './scenarios.js';
 import type {
   AliasesConfig,
@@ -11,6 +18,7 @@ import type {
   CountFieldsConfig,
   DeriveConfig,
   FieldOverridesConfig,
+  ListSizeConfig,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
@@ -40,10 +48,16 @@ export interface ResolvedOptions {
   addTypename: boolean;
   stableIds: boolean;
   /**
-   * Default sizing for every generated list, before a QA list profile or a `relations` entry —
-   * both of which are more specific and win over it.
+   * Catch-all sizing for every generated list: the flat `listSize` form, or the map's
+   * top-level `_default`. A QA list profile and a `relations` entry are both more specific
+   * and win over it.
    */
   listSize: ListSizeRange;
+  /**
+   * The `listSize` config as written, kept so {@link listSizeFor} can read the entries that
+   * name a type or a field — unlike the catch-all above, those outrank a QA list profile.
+   */
+  listSizes: ListSizeConfig | undefined;
   /**
    * Left unresolved: `dataForOperation` and the request handler can override it per call, and
    * `resolveArgMatching` is what folds the two together at the point of use.
@@ -93,6 +107,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     addTypename: options.addTypename ?? true,
     stableIds: options.stableIds ?? false,
     listSize: resolveListSize(options.listSize),
+    listSizes: options.listSize,
     matchArguments: options.matchArguments,
     argOverrides: options.argOverrides ?? [],
     idPrefix: options.idPrefix ?? '',
@@ -107,4 +122,24 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     qa,
     qaScalars: qa ? qaScalarMockers(qa) : undefined,
   };
+}
+
+/**
+ * Length bounds for one list field, wherever it is generated — a scalar or enum list in phase
+ * 1, a wired relationship list in phase 2, or a root list `dataForOperation` resolves.
+ *
+ * A `listSize` entry naming this type (and optionally this field) is a deliberate statement
+ * about one field, so it outranks a QA `lists` profile, which is a broad sweep. Everything
+ * else falls through to the profile, and then to the catch-all size. A `relations` entry is
+ * more specific still; the two relationship callers apply it on top of what this returns.
+ */
+export function listSizeFor(
+  typeName: string,
+  fieldName: string,
+  resolved: ResolvedOptions,
+): ListSizeRange {
+  return (
+    lookupListSize(typeName, fieldName, resolved.listSizes) ??
+    qaListLength(resolved.qa, resolved.listSize)
+  );
 }

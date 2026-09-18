@@ -35,7 +35,7 @@ import {
 } from './argMatching.js';
 import { paginate } from './collection.js';
 import { countsForList } from './countFields.js';
-import { qaFallbackText, qaListLength } from './qa.js';
+import { qaFallbackText } from './qa.js';
 import {
   UNBOUNDED,
   filterCandidates,
@@ -44,7 +44,7 @@ import {
   relationBounds,
   resolveRelation,
 } from './relations.js';
-import type { ResolvedOptions } from './resolveOptions.js';
+import { type ResolvedOptions, listSizeFor } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
 import type { ArgOverride, ArgOverrideContext } from './types.js';
 
@@ -338,7 +338,9 @@ function pickFromPool(ctx: ResolveContext, info: RootFieldInfo, args: Record<str
   // execution error, which is strictly worse than the random item the caller would have got.
   const isNonNullSingular = !isList && isNonNullType(info.returnType);
 
-  const fallback = isList ? qaListLength(resolved.qa, resolved.listSize) : SINGULAR_BOUNDS;
+  const fallback = isList
+    ? listSizeFor(info.parentType.name, info.fieldName, resolved)
+    : SINGULAR_BOUNDS;
   const spec = resolveRelation(info.parentType.name, info.fieldName, resolved.relations);
   const bounds = relationBounds(spec, fallback);
   if (bounds === null || bounds.max === 0) return empty;
