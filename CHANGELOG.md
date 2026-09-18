@@ -1,3 +1,11 @@
+# [3.6.0](https://github.com/cubicecho/graphql-mocks/compare/v3.5.0...v3.6.0) (2026-09-18)
+
+
+### Features
+
+* add dataOf to unwrap a mock envelope to its data ([ffabab7](https://github.com/cubicecho/graphql-mocks/commit/ffabab709f3c934e5d7d7ef9d2eef2b0aa0f562e)), closes [#36](https://github.com/cubicecho/graphql-mocks/issues/36)
+* **graphql-mocks:** treat the TTypes map as a hint in overrides and derive ([d23eacb](https://github.com/cubicecho/graphql-mocks/commit/d23eacb3a13b1ec702d01752b9f73b089636c900)), closes [#38](https://github.com/cubicecho/graphql-mocks/issues/38)
+
 # [3.5.0](https://github.com/cubicecho/graphql-mocks/compare/v3.4.0...v3.5.0) (2026-09-17)
 
 
