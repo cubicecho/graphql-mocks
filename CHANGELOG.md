@@ -1,3 +1,21 @@
+# [4.0.0](https://github.com/cubicecho/graphql-mocks/compare/v3.6.0...v4.0.0) (2026-09-18)
+
+
+### Features
+
+* **graphql-mocks:** size every list field with listSize ([5f59af3](https://github.com/cubicecho/graphql-mocks/commit/5f59af3974527e16d48334c9e5670219e53a8935)), closes [#59](https://github.com/cubicecho/graphql-mocks/issues/59)
+
+
+### BREAKING CHANGES
+
+* **graphql-mocks:** scalar and enum list fields are now sized by `listSize`
+(default 1-5) instead of a hardcoded 1-3, so generated list lengths — and the
+seeded faker sequence downstream of them — shift for any schema with such a
+field. Pin the old behaviour with `listSize: { min: 1, max: 3 }`, or name the
+fields that need it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [3.6.0](https://github.com/cubicecho/graphql-mocks/compare/v3.5.0...v3.6.0) (2026-09-18)
 
 
