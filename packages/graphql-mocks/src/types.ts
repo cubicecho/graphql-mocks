@@ -702,6 +702,11 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    * {@link BuildMocksOptions.matchArguments} is on (globally or via the third argument here);
    * otherwise pass them only if your schema requires them for execution — required variables
    * are auto-filled with placeholders when omitted.
+   *
+   * **Not idempotent.** Each call re-resolves against the pool and draws from the shared seeded
+   * faker, so two identical calls return different rows — and, for a root list, a different
+   * number of them. It reads like a pure accessor and is not one. To get the rows a *mock* will
+   * hand Apollo, build the mock and read it back with `dataOf`.
    */
   dataForOperation<TData = unknown, TVars = Record<string, unknown>>(
     document: TypedDocumentNode<TData, TVars> | DocumentNode,

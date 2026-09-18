@@ -1,7 +1,7 @@
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { parse } from 'graphql';
 import { describe, expect, it } from 'vitest';
-import { mockOperation, mockOperationVariants } from './apolloMocks.js';
+import { dataOf, mockOperation, mockOperationVariants } from './apolloMocks.js';
 
 type AwardData = { award: { id: string } | null };
 type AwardVars = { id: string };
@@ -13,6 +13,11 @@ const AwardByIdQuery = parse(
 const AnonymousQuery = parse('{ award { id } }') as TypedDocumentNode<AwardData, AwardVars>;
 
 const data: AwardData = { award: { id: 'Award-0' } };
+
+type Expect<T extends true> = T;
+type Equals<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
+  ? true
+  : false;
 
 describe('mockOperation', () => {
   it('produces a MockedProvider entry with the query and data', () => {
@@ -129,11 +134,6 @@ describe('mockOperation with a resolver function', () => {
 describe('mockOperation overload types', () => {
   // Compile-time guards, enforced by `npm run typecheck:tests`: adding the resolver form must
   // not widen `result` into a union, because consumers read `mock.result?.data` directly.
-  type Expect<T extends true> = T;
-  type Equals<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
-    ? true
-    : false;
-
   it('keeps result.data typed on the static overload', () => {
     const mock = mockOperation(AwardByIdQuery, data);
     const isStatic: Expect<Equals<typeof mock.result, { data?: AwardData } | undefined>> = true;
@@ -146,5 +146,63 @@ describe('mockOperation overload types', () => {
       Equals<typeof mock.result, ((variables: AwardVars) => { data?: AwardData }) | undefined>
     > = true;
     expect(isDynamic).toBe(true);
+  });
+});
+
+describe('dataOf', () => {
+  it('returns the data a static mock carries, without an optional chain', () => {
+    const mock = mockOperation(AwardByIdQuery, data);
+    expect(dataOf(mock)).toBe(data);
+    // The point of the helper: `award` is reachable without `?.` and without a `?? null`.
+    const unwrapped = dataOf(mock);
+    const isData: Expect<Equals<typeof unwrapped, AwardData>> = true;
+    expect(isData).toBe(true);
+  });
+
+  it('reads the success and long-load variants, which carry the same data', () => {
+    const variants = mockOperationVariants(AwardByIdQuery, data);
+    expect(dataOf(variants.withResults)).toBe(data);
+    expect(dataOf(variants.withLongLoadTime)).toBe(data);
+  });
+
+  it('resolves the dynamic form against the variables it is given', () => {
+    const mock = mockOperation(AwardByIdQuery, (vars: AwardVars) => ({ award: { id: vars.id } }));
+    expect(dataOf(mock, { id: 'Award-7' })).toEqual({ award: { id: 'Award-7' } });
+  });
+
+  it('defaults the variables to an empty object for a resolver that ignores them', () => {
+    const mock = mockOperation(AwardByIdQuery, () => data);
+    expect(dataOf(mock)).toBe(data);
+  });
+
+  it('re-resolves on every call, the way Apollo would', () => {
+    let calls = 0;
+    const mock = mockOperation(AwardByIdQuery, () => {
+      calls += 1;
+      return data;
+    });
+    dataOf(mock);
+    dataOf(mock);
+    expect(calls).toBe(2);
+  });
+
+  it('throws for the error variant, naming the operation and the error', () => {
+    const variants = mockOperationVariants(AwardByIdQuery, data);
+    expect(() => dataOf(variants.withError)).toThrow(/"AwardById"/);
+    expect(() => dataOf(variants.withError)).toThrow(/is an error variant/);
+  });
+
+  it('throws for an envelope assembled without a result', () => {
+    expect(() => dataOf({ request: { query: AwardByIdQuery } })).toThrow(/has no result/);
+  });
+
+  it('throws when the result resolves without data', () => {
+    expect(() => dataOf({ request: { query: AwardByIdQuery }, result: {} })).toThrow(
+      /resolved to a result with no data/,
+    );
+  });
+
+  it('says "anonymous" for an unnamed operation', () => {
+    expect(() => dataOf({ request: { query: AnonymousQuery } })).toThrow(/"anonymous"/);
   });
 });

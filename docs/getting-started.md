@@ -142,6 +142,14 @@ the query's own selection set selects the mocks and you write no fixture.
 `mockOperationVariants` gives you the `withResults` / `withLongLoadTime` /
 `withError` trio for the same document.
 
+To assert on what a mock carries, unwrap it with `dataOf` rather than reading
+`mock.result?.data?.…` — that chain's fallback turns a renamed field into an
+empty result instead of an error:
+
+```ts
+const posts = dataOf(m.withResults).searchPosts.results;
+```
+
 ### Storybook
 
 ```tsx
