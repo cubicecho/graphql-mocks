@@ -220,6 +220,8 @@ const data = mocks.dataForOperation(UserByIdQuery);
 
 `dataForOperation` understands lists, fragments, and interface/union fields (resolved via each mock's `__typename`). Variables are optional — any required ones are auto-filled with placeholders just so execution succeeds. By default they don't influence which mocks are chosen; turn on [argument matching](#argument-matching) to make them select data. With a `TypedDocumentNode` the return type is inferred from the document.
 
+It is **not idempotent**: each call re-resolves against the pool and draws from the shared seeded faker, so two identical calls return different rows — and, for a root list, a different number of them. It reads like a pure accessor and isn't one. To read the rows a *mock* will hand Apollo, build the mock and unwrap it with [`dataOf`](#reading-a-mock-back).
+
 ## Apollo `MockedProvider`
 
 These helpers turn a `TypedDocumentNode` into an entry for Apollo's `MockedProvider` `mocks` array — no hand-written `request`/`result` boilerplate.
@@ -266,6 +268,19 @@ m.withResults;      // resolves with data drawn from the pool
 m.withLongLoadTime; // stays pending — drive loading states
 m.withError;        // rejects with an error naming the operation
 ```
+
+### Reading a mock back
+
+`MockedResponse` types `result` and `result.data` as optional, because the error and loading variants exist. So asserting on what a mock carries means `mock.result?.data?.searchPosts?.results ?? []` — a chain whose fallback turns a renamed field into "empty" rather than a type error. `dataOf` unwraps the envelope and returns `TData` non-optionally:
+
+```ts
+import { dataOf } from '@vantreeseba/graphql-mocks';
+
+const m = mocks.mockOperationVariants(PostsQuery);
+const posts = dataOf(m.withResults).searchPosts.results; // typed, no `?.`, no `?? []`
+```
+
+It throws when there is no data to return — the `withError` variant, or an envelope assembled without a `result`. `withLongLoadTime` carries the same data as `withResults`, so it returns rather than throws. For a [resolver-form mock](#resolver-function-mocks), pass the variables to resolve with: `dataOf(mock, { id: 'User-1' })`; they default to `{}`.
 
 `@graphql-typed-document-node/core` (bundled with Apollo Client and graphql-codegen) provides the `TypedDocumentNode` type; it's an optional peer, only needed if you use these helpers.
 

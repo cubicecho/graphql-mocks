@@ -231,3 +231,51 @@ export function mockOperationVariants<TData, TVars>(
     }),
   };
 }
+
+/**
+ * The data inside a mock envelope, non-optionally.
+ *
+ * `MockedResponse` types `result` and `result.data` as optional, because the error and loading
+ * variants exist — so reading the rows back out of a mock means
+ * `mock.result?.data?.searchPosts?.results ?? []`, a chain whose fallback turns a renamed field
+ * into "empty" rather than a type error. And `dataForOperation` is no substitute: it re-resolves
+ * against the pool on every call, so it does not return the rows *this mock* will hand Apollo.
+ *
+ * ```ts
+ * const mocks = mockOperationVariants(PostsQuery, data);
+ * const posts = dataOf(mocks.withResults).searchPosts.results;  // typed, no `?.`, no `?? []`
+ * ```
+ *
+ * Throws when there is no data to return — the `withError` variant, or an envelope assembled
+ * without a `result`. `withLongLoadTime` carries the same data as `withResults` (only a long
+ * delay separates them), so it returns rather than throws.
+ *
+ * For the resolver form — `mockOperationVariants(Doc, (variables) => data)` — pass the
+ * variables to resolve with; they default to `{}`, which is what a resolver ignoring its
+ * argument would see anyway.
+ */
+export function dataOf<TData, TVars>(
+  mock: AnyMockedResponse<TData, TVars>,
+  variables?: TVars,
+): TData {
+  const site = `"${operationName(mock.request.query) ?? 'anonymous'}"`;
+  if (mock.error) {
+    throw new TypeError(
+      `[graphql-mocks] dataOf: the mock for ${site} is an error variant (${mock.error.message}), so it has no data`,
+    );
+  }
+  if (mock.result === undefined) {
+    throw new TypeError(
+      `[graphql-mocks] dataOf: the mock for ${site} has no result — only an error or a hand-assembled envelope should be missing one`,
+    );
+  }
+
+  const resolved =
+    typeof mock.result === 'function' ? mock.result(variables ?? ({} as TVars)) : mock.result;
+  if (resolved.data === undefined) {
+    throw new TypeError(
+      `[graphql-mocks] dataOf: the mock for ${site} resolved to a result with no data`,
+    );
+  }
+  return resolved.data;
+}
