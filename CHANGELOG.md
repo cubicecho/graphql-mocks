@@ -1,3 +1,19 @@
+# [5.0.0](https://github.com/cubicecho/graphql-mocks/compare/v4.2.0...v5.0.0) (2026-09-20)
+
+
+* feat(graphql-mocks)!: draw scalar and enum lists without replacement, and stabilize every identifier field ([458d0e3](https://github.com/cubicecho/graphql-mocks/commit/458d0e35de83ea714f4b731d12c3423447c9f407)), closes [#69](https://github.com/cubicecho/graphql-mocks/issues/69)
+
+
+### BREAKING CHANGES
+
+* scalar and enum list fields now hold distinct values by
+default, so generated output shifts for any schema with such lists: values no
+longer repeat, and a list over a small enum or a low-cardinality generator can
+be shorter than `listSize` asks for. Set `uniqueLists: false` to restore the
+previous output. `stableIds: true` additionally rewrites identifier-shaped
+string fields beyond `id` (`paymentMethodId` and friends), which previously
+held random scalar values.
+
 # [4.2.0](https://github.com/cubicecho/graphql-mocks/compare/v4.1.0...v4.2.0) (2026-09-20)
 
 
