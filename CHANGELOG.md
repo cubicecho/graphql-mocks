@@ -1,3 +1,10 @@
+# [4.1.0](https://github.com/cubicecho/graphql-mocks/compare/v4.0.1...v4.1.0) (2026-09-20)
+
+
+### Features
+
+* **apollo:** derive one story parameter from another ([6ad9bc6](https://github.com/cubicecho/graphql-mocks/commit/6ad9bc67bb425561b684210c29f3493a00c15d0a))
+
 ## [4.0.1](https://github.com/cubicecho/graphql-mocks/compare/v4.0.0...v4.0.1) (2026-09-20)
 
 
