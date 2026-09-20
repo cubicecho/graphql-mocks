@@ -150,6 +150,33 @@ The second argument is `{ index, typeName, fieldName, faker }`, with the same se
 
 Merging follows the same two-level rule as `overrides`: a scenario layer and the build options combine per type and per field.
 
+### Fields from one draw (`deriveObject`)
+
+`derive` fires once per field, and every field draws from the same faker stream as it comes — so a set of numbers that have to *agree* has no way to see what the others drew. `deriveObject` is one function per type, run once per instance, returning an object merged over the generated one:
+
+```ts
+const mocks = buildMocks(schema, {
+  deriveObject: {
+    Order: (_self, { faker }) => {
+      const subtotal = faker.number.float({ min: 10, max: 500 });
+      const tax = subtotal * 0.08;
+      return { subtotal, tax, total: subtotal + tax };
+    },
+  },
+});
+```
+
+Every `Order` in the pool now adds up, from one draw, with no memo keyed on the instance and no re-seeding of the shared faker. A key the returned object omits is left exactly as generated, so a partial really is partial, and returning nothing at all leaves the instance untouched — which is how an object derive fires for only some instances.
+
+The second argument is `{ index, typeName, faker }` — the same context a `derive` gets, minus `fieldName`, since an object derive writes as many fields as it returns.
+
+It runs in the same phase as `derive` and sees the same finished object: every scalar, every wired relationship, every reciprocal back-reference. Within one type the order is **`deriveObject`, then `derive`**, so:
+
+- a `derive` for a key the object derive returned **wins** — naming one field is the more specific statement of the two;
+- a `derive` reads the correlated draw off `self` rather than racing it — a label over the total the object derive just set is an ordinary field derive.
+
+Both still win over an `overrides` entry for the same field, which fires while the instance is half-built. Merging is one level: a scenario layer and the build options combine per type, and the later function replaces the earlier one outright.
+
 ### Aliased fields
 
 A fragment that aliases a field produces a result type whose keys the pooled objects don't have:
@@ -1301,6 +1328,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `fieldOverrides` | `Record<field, (faker, ctx) => unknown>` | — | [Overrides keyed by field name](#by-field-name-fieldoverrides), applied to every type carrying it. A key wrapped in slashes is a pattern; a type-keyed `overrides` entry wins |
 | `aliases` | `Record<type, Record<field, string \| string[]>>` | — | [Expose a field under extra names](#aliased-fields), for fragments that alias it. Same reference, applied last |
 | `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
+| `deriveObject` | `Record<type, (self, ctx) => object>` | — | [One function per type](#fields-from-one-draw-deriveobject) returning a partial merged over the instance, for fields that come from a single correlated draw. Runs just before `derive`, which wins on a key both write |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
 | `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
@@ -1315,7 +1343,8 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 
 Each structured option's shape is exported as a type, so a config can be declared
 away from the `buildMocks` call and still be checked — `CountConfig`,
-`OverridesConfig`, `DeriveConfig`, `RelationsConfig`, `CountFieldsConfig`,
+`OverridesConfig`, `DeriveConfig`, `ObjectDeriveConfig`, `RelationsConfig`,
+`CountFieldsConfig`,
 `QaConfig`, `ArgOverride`, `Scenario`, and `ScenarioMap`. Each takes the same
 optional `TTypes` map as `buildMocks`, which is what binds its keys to the schema:
 

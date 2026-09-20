@@ -200,6 +200,55 @@ export type DeriveConfig<TTypes extends Record<string, unknown> = Record<string,
 };
 
 /**
+ * Where an object derive is firing. {@link DeriveContext} without `fieldName`, because an
+ * object derive writes as many fields as it returns rather than one named one.
+ */
+export type ObjectDeriveContext = Omit<DeriveContext, 'fieldName'>;
+
+// What an object derive may return: the mapped fields bound to their own types, plus anything
+// else. Unlike `FieldDerives`, the intersection is in the *return* position only, so it never
+// reaches the contextual typing of `self` and `ctx`.
+type DerivedObject<T> = unknown extends T
+  ? Record<string, unknown>
+  : Partial<T> & Record<string, unknown>;
+
+/**
+ * Compute several fields of one instance from a single draw. Runs once per instance, sees the
+ * same finished object a {@link FieldDeriveFn} does, and returns a partial merged over it:
+ *
+ * ```ts
+ * deriveObject: {
+ *   Order: (_self, { faker }) => {
+ *     const subtotal = faker.number.float({ min: 10, max: 500 });
+ *     const tax = subtotal * 0.08;
+ *     return { subtotal, tax, total: subtotal + tax };
+ *   },
+ * }
+ * ```
+ *
+ * A key the returned object does not carry is left as generated, so a partial really is partial.
+ *
+ * @typeParam TSelf - The owning object's type.
+ */
+export type ObjectDeriveFn<TSelf = Record<string, unknown>> = (
+  self: TSelf,
+  ctx: ObjectDeriveContext,
+) => DerivedObject<TSelf>;
+
+// Degrade to a loosely-typed `self` when the map carries no shape for the type, the same way
+// `FieldDerives` does — otherwise `self` would arrive as `unknown` and read nothing.
+type TypeObjectDerive<T> = unknown extends T ? ObjectDeriveFn : ObjectDeriveFn<T>;
+
+/**
+ * Per-type object derive map: one function per type, returning the fields that have to be
+ * drawn together. With a `TTypes` map, type names autocomplete, `self` is the owning type,
+ * and a returned field the map carries is bound to that field's type.
+ */
+export type ObjectDeriveConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: TypeObjectDerive<TTypes[K]>;
+};
+
+/**
  * How many related objects a relationship field gets. A number is an exact size, a
  * `{ min, max }` range picks a random size in between, `'all'` takes the whole target pool,
  * and `null` means none — `[]` for a list field, `null` for a singular one.
@@ -560,6 +609,34 @@ export interface BuildMocksOptions<
    * Applies to pooled instances, which is what every operation draws from.
    */
   derive?: DeriveConfig<TTypes>;
+  /**
+   * One function per type, returning an object merged over the generated instance — for the
+   * fields that come from a **single** draw and so cannot be written one at a time:
+   *
+   * ```ts
+   * buildMocks(schema, {
+   *   deriveObject: {
+   *     Order: (_self, { faker }) => {
+   *       const subtotal = faker.number.float({ min: 10, max: 500 });
+   *       const tax = subtotal * 0.08;
+   *       return { subtotal, tax, total: subtotal + tax };
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * A per-field `derive` runs once per field against a faker stream it shares with every other
+   * field, so three numbers that must add up have no way to agree without a memo keyed on the
+   * instance. Here they are one expression.
+   *
+   * Runs in the same phase as `derive` and sees the same finished object — every scalar, every
+   * wired relationship, every reciprocal back-reference. Within a type the object derive runs
+   * **first** and a `derive` for a key it returned wins, being the more specific entry; a
+   * `derive` therefore reads the correlated values off `self`. Both beat `overrides`, which
+   * fires while the instance is half-built. A key the returned object omits is left as
+   * generated, and a nullish return leaves the instance untouched.
+   */
+  deriveObject?: ObjectDeriveConfig<TTypes>;
   /**
    * Keep count scalars in step with the lists they count, and size those lists to the whole pool
    * of what they hold — the one size at which a wrapper's total and its pageable rows agree:
