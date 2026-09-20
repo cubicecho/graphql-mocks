@@ -2,6 +2,7 @@ import { ApolloClient, ApolloLink, InMemoryCache, Observable } from '@apollo/cli
 import { type ScenarioTarget, mockScenarios } from '../mockScenarios.js';
 import type { MockHandlerOptions, MockRequestHandler } from '../requestHandler.js';
 import type { BuildMocksOptions, MockResult, QaOption } from '../types.js';
+import { toMockClientParameter } from './parameter.js';
 
 /**
  * Wrap a mock graph (or an existing handler) in an `ApolloLink`, so an `ApolloClient` resolves
@@ -254,11 +255,7 @@ export interface MockClientParameter extends CreateMockClientOptions {
 /** What a story may set the parameter to. `false` means "no mock client for this story". */
 export type MockClientOption = boolean | MockClientState | MockClientParameter;
 
-function normalizeParameter(parameter: MockClientOption | undefined): MockClientParameter {
-  if (parameter === undefined || typeof parameter === 'boolean') return {};
-  if (typeof parameter === 'string') return { state: parameter };
-  return parameter;
-}
+export { toMockClientParameter, withQa, withState } from './parameter.js';
 
 function graphFor(source: MockClientSource, parameter: MockClientParameter): MockClientSource {
   const wantsBuild = parameter.build !== undefined || parameter.qa !== undefined;
@@ -299,13 +296,13 @@ export function resolveMockClient(
     build: _build,
     qa: _qa,
     ...options
-  } = normalizeParameter(parameter);
+  } = toMockClientParameter(parameter);
   const { cache, link, defaultOptions, clientOptions, ...handler } = { ...base, ...options };
   const scenario = mockScenarios(
     { ...handler, overrides: [...(options.overrides ?? []), ...(base.overrides ?? [])] },
     target,
   )[state];
-  return createMockClient(graphFor(source, normalizeParameter(parameter)), {
+  return createMockClient(graphFor(source, toMockClientParameter(parameter)), {
     ...scenario,
     cache,
     link,
@@ -314,10 +311,14 @@ export function resolveMockClient(
   });
 }
 
-/** The two pieces of a decorator's contract this module touches — no Storybook import needed. */
+/** The pieces of a decorator's contract this module touches — no Storybook import needed. */
 export type StoryFnLike = (context?: unknown) => unknown;
 
 export interface StoryContextLike {
+  /** Storybook's id for the story being rendered — stable across that story's re-renders. */
+  id?: string;
+  /** The stories file's title, as {@link GraphqlMocksDecoratorOptions.clientKey} tends to use. */
+  title?: string;
   parameters?: Record<string, unknown>;
 }
 
@@ -333,6 +334,18 @@ export interface GraphqlMocksDecoratorOptions extends CreateMockClientOptions {
   wrap: (client: MockApolloClient, story: StoryFnLike, context: StoryContextLike) => unknown;
   /** Story parameter to read. @default 'graphqlMocks' */
   parameterName?: string;
+  /**
+   * What the client memo is scoped to. Each story gets its own client — and so its own cache —
+   * by default; return the same key from several stories to hand them one shared client on
+   * purpose, which is the only way one story's writes reach the next:
+   *
+   * ```ts
+   * clientKey: (context) => context.title  // one client per stories file
+   * ```
+   *
+   * Returning `undefined` falls back to the story's own id.
+   */
+  clientKey?: (context: StoryContextLike) => string | undefined;
 }
 
 /**
@@ -357,21 +370,33 @@ export interface GraphqlMocksDecoratorOptions extends CreateMockClientOptions {
  * A story with no parameter still gets the default client, since a global decorator is added to
  * mock everything; `false` opts a single story back out.
  *
- * Clients are memoized per resolved parameter, so a re-render reuses the client it already has
- * instead of remounting into a fresh cache and refetching on every keystroke.
+ * Clients are memoized per story and resolved parameter, so a re-render reuses the client it
+ * already has instead of remounting into a fresh cache and refetching on every keystroke, while
+ * two stories never answer from each other's rows. `clientKey` opts a set of stories into
+ * sharing one client deliberately.
  */
 export function withGraphqlMocks(
   source: MockClientSource,
   options: GraphqlMocksDecoratorOptions,
 ): (story: StoryFnLike, context?: StoryContextLike) => unknown {
-  const { wrap, parameterName = 'graphqlMocks', ...base } = options;
+  const { wrap, parameterName = 'graphqlMocks', clientKey, ...base } = options;
+  // One entry per story rendered, rather than per parameter: a docs page renders a whole stories
+  // file at once, so evicting the story that is no longer current would thrash that page.
   const clients = new Map<string, MockApolloClient>();
 
   return (story, context = {}) => {
     const parameter = context.parameters?.[parameterName] as MockClientOption | undefined;
     if (parameter === false) return story(context);
 
-    const key = stableKey(parameter ?? true);
+    // Scoping the memo to the story is what keeps one story's mutation — or its paged, filtered
+    // list — out of the next story's cache: `stableKey(true)` is one string for every story that
+    // takes the default parameter, so a parameter-only key made the result of a story depend on
+    // which stories rendered before it.
+    const scope = clientKey?.(context) ?? context.id ?? '';
+    const parameterKey = stableKey(parameter ?? true);
+    // Quoted so a caller-supplied scope containing the separator cannot collide with another
+    // scope-and-parameter pair.
+    const key = parameterKey === null ? null : `${JSON.stringify(scope)}:${parameterKey}`;
     const cached = key === null ? undefined : clients.get(key);
     const client = cached ?? resolveMockClient(source, parameter, base);
     if (key !== null && cached === undefined) clients.set(key, client);
