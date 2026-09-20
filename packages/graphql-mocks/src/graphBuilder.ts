@@ -402,35 +402,73 @@ function wireReciprocal(
 }
 
 /**
- * Run `derive` over every pooled instance. Last phase by design: an instance is only complete
- * once relationships are wired, and a derived field is exactly the one that needs to read them.
- * A typo'd type or field name is worth saying out loud — a derive that never fires looks the
- * same as one whose value was overwritten.
+ * Run `deriveObject` and `derive` over every pooled instance. Last phase by design: an instance
+ * is only complete once relationships are wired, and a derived field is exactly the one that
+ * needs to read them. A typo'd type or field name is worth saying out loud — a derive that never
+ * fires looks the same as one whose value was overwritten.
+ *
+ * Per type the object derive goes first and a field derive for a key it returned overwrites it:
+ * naming one field is the more specific statement, and it means a field derive reads the
+ * correlated draw off `self` rather than racing it.
  */
 function applyDerive(
   objectTypes: GraphQLObjectType[],
   pool: Record<string, Record<string, unknown>[]>,
   resolved: ResolvedOptions,
 ): void {
-  const { derive, faker } = resolved;
-  if (!derive) return;
+  const { derive, deriveObject, faker } = resolved;
+  if (!derive && !deriveObject) return;
 
   const known = new Set(objectTypes.map((objectType) => objectType.name));
-  for (const typeName of Object.keys(derive)) {
+  const namedTypes = new Set([...Object.keys(derive ?? {}), ...Object.keys(deriveObject ?? {})]);
+  for (const typeName of namedTypes) {
     if (!known.has(typeName)) {
       console.warn(`[graphql-mocks] derive: unknown type "${typeName}" — no pool to derive onto`);
     }
   }
 
   for (const objectType of objectTypes) {
-    const fields = derive[objectType.name];
-    if (!fields) continue;
+    const fields = derive?.[objectType.name];
+    const objectFn = deriveObject?.[objectType.name];
+    if (!fields && typeof objectFn !== 'function') continue;
 
     const schemaFields = objectType.getFields();
+    // The config is the same every time round the pool, so each complaint is worth making once.
+    const warnedKeys = new Set<string>();
+    let warnedReturn = false;
+
+    /** Merge an object derive's return over the instance, warning about what can't be merged. */
+    const mergeDerived = (instance: Record<string, unknown>, result: unknown) => {
+      // Nothing to merge is a legitimate answer: an object derive that only fires for some
+      // instances would otherwise have to return an empty object to say so.
+      if (result == null) return;
+
+      if (typeof result !== 'object' || Array.isArray(result)) {
+        if (!warnedReturn) {
+          warnedReturn = true;
+          const kind = Array.isArray(result) ? 'an array' : `a ${typeof result}`;
+          console.warn(
+            `[graphql-mocks] deriveObject: "${objectType.name}" returned ${kind} — an object derive has to return the fields to merge`,
+          );
+        }
+        return;
+      }
+
+      for (const [key, value] of Object.entries(result)) {
+        if (!(key in schemaFields) && !warnedKeys.has(key)) {
+          warnedKeys.add(key);
+          console.warn(
+            `[graphql-mocks] deriveObject: "${objectType.name}.${key}" is not a field on that type — the value will be in the pool but no query can select it`,
+          );
+        }
+        instance[key] = value;
+      }
+    };
+
     // Object.entries order is the order the config was written, so one derive can read
     // another's result; hold the pairs once rather than re-walking per instance.
     const entries: [string, FieldDeriveFn][] = [];
-    for (const [fieldName, fn] of Object.entries(fields)) {
+    for (const [fieldName, fn] of Object.entries(fields ?? {})) {
       if (typeof fn !== 'function') continue;
       if (!(fieldName in schemaFields)) {
         console.warn(
@@ -441,6 +479,9 @@ function applyDerive(
     }
 
     for (const [index, instance] of (pool[objectType.name] ?? []).entries()) {
+      if (typeof objectFn === 'function') {
+        mergeDerived(instance, objectFn(instance, { index, typeName: objectType.name, faker }));
+      }
       for (const [fieldName, fn] of entries) {
         instance[fieldName] = fn(instance, {
           index,
@@ -572,8 +613,9 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   // resized, or the ones phase 2 sized to their pool for `countFields`.
   syncCountFields(objectTypes, pool, resolved);
 
-  // Phase 5: compute fields that are a function of the finished object. Last, so a derive that
-  // names a count field wins over phase 4's inference — it was written, the other was guessed.
+  // Phase 5: compute fields that are a function of the finished object — `deriveObject` per
+  // instance, then `derive` per field. Last, so a derive that names a count field wins over
+  // phase 4's inference — it was written, the other was guessed.
   applyDerive(objectTypes, pool, resolved);
 
   // Phase 6: expose aliased fields under their alias names, once the values are final.
