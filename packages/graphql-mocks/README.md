@@ -704,6 +704,38 @@ withGraphqlMocks(factory, {
 `resolveMockClient(source, parameter, base)` is the same resolution without the decorator, for
 a renderer `wrap` doesn't fit.
 
+#### Deriving one parameter from another
+
+A set of stories usually shares one base parameter and varies it. Because the parameter is a
+union, a helper that re-states a short form drops whatever the base set — silently:
+
+```ts
+const base = { overrides: [orderFixture], target: 'OrderById' };
+
+// `'loading'` on its own would drop the base's overrides and target: the story still renders,
+// just not the data the rest of the set is built on.
+export const Loading = { parameters: { graphqlMocks: withState(base, 'loading') } };
+```
+
+`withState(parameter, state)` and `withQa(parameter, qa)` are parameter-in / parameter-out and
+keep every other field — `overrides`, `target`, `build` and the handler options — so a derived
+story differs from its base in exactly the one thing it names. `false` (a story opted out of
+mocking) comes back as `false`, since it has no state to be in.
+
+`toMockClientParameter(parameter)` is the primitive under both: the long form of any accepted
+parameter, reading each short form exactly as the decorator does (`true` and an absent parameter
+are `{ state: 'default' }`, a string is that state, a long form is copied through). Reach for it
+when a helper layers on something these two don't cover:
+
+```ts
+import { type MockClientOption, toMockClientParameter } from '@vantreeseba/graphql-mocks/apollo';
+
+const slow = (parameter: MockClientOption) => ({
+  ...toMockClientParameter(parameter),
+  delay: 2000,
+});
+```
+
 The same shape works in component tests:
 
 ```tsx
