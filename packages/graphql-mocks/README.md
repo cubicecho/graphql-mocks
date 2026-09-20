@@ -205,14 +205,34 @@ Config errors throw before anything is generated: an unknown type or field, a no
 
 ### `__typename` and stable ids
 
-Every object gets a `__typename` by default (the Apollo cache needs it). Turn it off with `addTypename: false`. Enable `stableIds` to give each object with an `id` field a readable, collision-free `TypeName-<index>` id instead of a random scalar:
+Every object gets a `__typename` by default (the Apollo cache needs it). Turn it off with `addTypename: false`. Enable `stableIds` to give each object's **identifier fields** readable, collision-free values instead of random scalars:
 
 ```ts
 const mocks = buildMocks(schema, { stableIds: true });
 mocks.User[0]; // { __typename: 'User', id: 'User-0', ... }
 ```
 
-An explicit `overrides` entry for `id` still wins over `stableIds`.
+`stableIds: true` covers every field the library recognizes as an identifier by name: `id` in any
+casing, and anything ending in `Id` or `ID`. `id` keeps the bare `TypeName-<index>` form; any
+other field carries its own name too, so an object with both never gets one value twice:
+
+```ts
+// type PaymentMethod { id: ID!, paymentMethodId: String! }
+mocks.PaymentMethod[0]; // { id: 'PaymentMethod-0', paymentMethodId: 'PaymentMethod-paymentMethodId-0', ... }
+```
+
+A schema whose identifier is named something the convention can't see (`Currency.code`) names it,
+globally or per type. Those are covered **in addition** to the recognized ones:
+
+```ts
+buildMocks(schema, { stableIds: ['code'] });                        // any type's `code`
+buildMocks(schema, { stableIds: { Currency: ['code'], _default: [] } }); // just Currency's
+```
+
+Beyond `id` itself, only string-valued scalar fields are replaced — writing `Order-externalId-0`
+over an `Int`, an enum or a list would hand back data the schema rejects, so those are left as
+generated. An explicit `overrides` entry still wins over `stableIds`, and is how you keep a
+recognized field random.
 
 ### Interfaces / unions
 
@@ -1154,6 +1174,46 @@ Notes:
 - Config errors throw rather than silently doing nothing: an unknown type, an unknown field, or an
   entry on a field that isn't a list is a `TypeError`.
 
+### `uniqueLists`
+
+Generated lists hold **distinct** values. Object lists have always been drawn without replacement
+from their pool; scalar and enum lists are too, so `tags.map(tag => <Chip key={tag}>)` — the
+obvious thing to write for a tag list — can't warn about duplicate keys on the seed where two
+`faker.lorem.word()` calls happened to collide.
+
+The length gives way, not the distinctness. An enum list is clamped to the number of values the
+enum has, so a three-value `Status` yields at most three entries however large `listSize` is:
+
+```ts
+// enum Status { OPEN CLOSED CANCELLED }
+buildMocks(schema, { listSize: { Order: { statuses: { min: 4, max: 10 } } } });
+// order.statuses → 3 entries, all distinct — there is no fourth value to draw
+```
+
+A scalar generator has no countable set of values, so "without replacement" is a bounded retry: a
+draw that repeats an earlier one is re-drawn, and after twelve consecutive collisions the list
+comes back short rather than looping — the same way a relationship list comes back short when its
+pool can't fill it.
+
+Turn it off with the flat form, or per type and field with a map shaped like `listSize`:
+
+```ts
+buildMocks(schema, { uniqueLists: false });                     // draw with replacement again
+buildMocks(schema, { uniqueLists: { Post: { tags: false } } }); // just Post.tags
+buildMocks(schema, { uniqueLists: { Post: false, _default: true } });
+```
+
+Notes:
+
+- **QA mode turns it off by default.** The QA corpora are a handful of values each, so
+  deduplicating would silently cap a `lists: 'huge'` profile at the size of the corpus. An
+  explicit `uniqueLists` — flat or per field — still applies under `qa`.
+- **A named entry beats that default**, the same way a named `listSize` beats a QA `lists`
+  profile.
+- Scenario layers merge it per type then per field, like `listSize`.
+- Config errors throw rather than silently doing nothing: an unknown type, an unknown field, or an
+  entry on a field that isn't a list is a `TypeError`.
+
 ### Named scenarios
 
 A scenario is a named partial `buildMocks` config. `defineScenarios` is an identity function that
@@ -1331,9 +1391,10 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `deriveObject` | `Record<type, (self, ctx) => object>` | — | [One function per type](#fields-from-one-draw-deriveobject) returning a partial merged over the instance, for fields that come from a single correlated draw. Runs just before `derive`, which wins on a key both write |
 | `resolveType` | `(abstractType: string) => string` | — | Concrete type for interface/union fields. With a `TTypes` map, the return is constrained to the map's type names |
 | `addTypename` | `boolean` | `true` | Add `__typename` to every object (Apollo cache needs it) |
-| `stableIds` | `boolean` | `false` | Give `id` fields stable `TypeName-<index>` values |
+| `stableIds` | `boolean \| string[] \| { [type]: string[] }` | `false` | Give identifier fields stable values — `id` as `TypeName-<index>`, any other recognized or named field as `TypeName-<field>-<index>`. See [stable ids](#__typename-and-stable-ids) |
 | `idPrefix` | `string` | `''` | Prefix for `stableIds` ids (`<prefix>User-0`), so pools built in one run don't collide |
 | `listSize` | `number \| { min, max } \| { [type]: { [field]: size } }` | `{ min: 1, max: 5 }` | How many items every generated list field holds — scalar, enum, relationship and root alike. Per-type/per-field entries beat a QA `lists` profile; a `relations` entry beats both. See [`listSize`](#listsize) |
+| `uniqueLists` | `boolean \| { [type]: { [field]: boolean } }` | `true` (`false` under `qa`) | Draw scalar and enum lists without replacement, clamping the length to the distinct values available. See [`uniqueLists`](#uniquelists) |
 | `qa` | `QaProfileName \| QaConfig \| false` | — | [QA mode](#qa-mode) — generate deliberately out-of-norm data (empty/long/unicode text, empty/huge lists, nulls, boundary numbers and dates) |
 | `relations` | `RelationsConfig` | — | [Shape relationships](#relations) — sizes, ranges, `null`, `'all'`, a `{ size, where }` filter, or a function picking the related objects |
 | `countFields` | `boolean \| { [type]: { [countField]: listField } }` | — | [Pair count scalars with the lists they count](#counts-that-agree-with-their-lists) and size those lists to the pool. A map adds the pairings the name convention misses, and turns the pass on |
@@ -1344,8 +1405,8 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 Each structured option's shape is exported as a type, so a config can be declared
 away from the `buildMocks` call and still be checked — `CountConfig`,
 `OverridesConfig`, `DeriveConfig`, `ObjectDeriveConfig`, `RelationsConfig`,
-`CountFieldsConfig`,
-`QaConfig`, `ArgOverride`, `Scenario`, and `ScenarioMap`. Each takes the same
+`CountFieldsConfig`, `QaConfig`, `UniqueListsConfig`, `StableIdsConfig`,
+`ArgOverride`, `Scenario`, and `ScenarioMap`. Each takes the same
 optional `TTypes` map as `buildMocks`, which is what binds its keys to the schema:
 
 ```ts

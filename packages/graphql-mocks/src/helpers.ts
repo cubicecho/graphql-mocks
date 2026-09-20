@@ -12,6 +12,7 @@ import type {
   CountConfig,
   ListSizeConfig,
   ListSizeRangeConfig,
+  UniqueListsConfig,
 } from './types.js';
 
 export const OPERATION_TYPE_NAMES = new Set(['Query', 'Mutation', 'Subscription']);
@@ -103,27 +104,33 @@ function isListField(type: GraphQLType): boolean {
 }
 
 /**
- * Reject `listSize` entries that name something the schema does not have, or something that is
- * not a list. Both are silent no-ops otherwise — and a `listSize` that quietly does nothing is
- * the exact failure this option was widened to fix.
+ * Reject entries of a per-type/per-field list option that name something the schema does not
+ * have, or something that is not a list. Both are silent no-ops otherwise — and an option that
+ * quietly does nothing is the exact failure the map forms were added to fix.
  *
- * Sizes themselves are not checked: {@link resolveListSize} already clamps them non-negative
- * and orders inverted bounds.
+ * `isFlat` tells the option's flat form (which names nothing, so there is nothing to check)
+ * from a map, at both levels; `hint` closes the "not a list" message in the option's own terms.
  */
-export function validateListSize(schema: GraphQLSchema, config: ListSizeConfig | undefined): void {
-  if (config === undefined || isListSizeRange(config)) return;
+function validateListFieldMap(
+  schema: GraphQLSchema,
+  config: unknown,
+  option: string,
+  isFlat: (value: unknown) => boolean,
+  hint: string,
+): void {
+  if (config === undefined || isFlat(config)) return;
 
-  for (const [typeName, entry] of Object.entries(config)) {
+  for (const [typeName, entry] of Object.entries(config as Record<string, unknown>)) {
     if (typeName === '_default') continue;
 
     const type = schema.getType(typeName);
     if (!isObjectType(type)) {
       throw new TypeError(
-        `[graphql-mocks] listSize: unknown type "${typeName}" — no object type by that name in the schema`,
+        `[graphql-mocks] ${option}: unknown type "${typeName}" — no object type by that name in the schema`,
       );
     }
-    // A bare size under the type name covers every list it has, so there is no field to check.
-    if (isListSizeRange(entry as ListSizeConfig)) continue;
+    // A bare value under the type name covers every list it has, so there is no field to check.
+    if (isFlat(entry)) continue;
 
     const fields = type.getFields();
     for (const fieldName of Object.keys(entry as Record<string, unknown>)) {
@@ -131,13 +138,83 @@ export function validateListSize(schema: GraphQLSchema, config: ListSizeConfig |
 
       const field = fields[fieldName];
       if (!field) {
-        throw new TypeError(`[graphql-mocks] listSize: unknown field "${typeName}.${fieldName}"`);
+        throw new TypeError(`[graphql-mocks] ${option}: unknown field "${typeName}.${fieldName}"`);
       }
       if (!isListField(field.type)) {
         throw new TypeError(
-          `[graphql-mocks] listSize: "${typeName}.${fieldName}" is not a list (${field.type}) — listSize only sizes lists, use overrides or relations for anything else`,
+          `[graphql-mocks] ${option}: "${typeName}.${fieldName}" is not a list (${field.type}) — ${hint}`,
         );
       }
     }
   }
+}
+
+/**
+ * Reject `listSize` entries that name something the schema does not have, or something that is
+ * not a list.
+ *
+ * Sizes themselves are not checked: {@link resolveListSize} already clamps them non-negative
+ * and orders inverted bounds.
+ */
+export function validateListSize(schema: GraphQLSchema, config: ListSizeConfig | undefined): void {
+  validateListFieldMap(
+    schema,
+    config,
+    'listSize',
+    (value) => isListSizeRange(value as ListSizeConfig),
+    'listSize only sizes lists, use overrides or relations for anything else',
+  );
+}
+
+/** Whether a `uniqueLists` value is the flat on/off form rather than a per-type map. */
+export function isUniqueListsFlag(config: unknown): config is boolean {
+  return typeof config === 'boolean';
+}
+
+/**
+ * The catch-all setting: the flat form as written, or a map's top-level `_default`. Named type
+ * and field entries are read by {@link lookupUniqueLists} instead, because those outrank the
+ * QA-driven fallback while this catch-all does not.
+ */
+export function resolveUniqueLists(
+  config: UniqueListsConfig | undefined,
+  fallback: boolean,
+): boolean {
+  if (config === undefined) return fallback;
+  if (isUniqueListsFlag(config)) return config;
+  return config._default ?? fallback;
+}
+
+/**
+ * The entry naming one field, resolved `[type][field]` → `[type]._default`, with a bare flag
+ * under the type name covering all of its lists. `undefined` means "no opinion", which leaves
+ * the catch-all to decide.
+ */
+export function lookupUniqueLists(
+  typeName: string,
+  fieldName: string,
+  config: UniqueListsConfig | undefined,
+): boolean | undefined {
+  if (config === undefined || isUniqueListsFlag(config)) return undefined;
+
+  const typeEntry = config[typeName];
+  if (typeEntry === undefined) return undefined;
+  if (isUniqueListsFlag(typeEntry)) return typeEntry;
+
+  const fields = typeEntry as Record<string, boolean | undefined>;
+  return fields[fieldName] ?? fields._default;
+}
+
+/** Reject `uniqueLists` entries that name an unknown type or field, or a field that is not a list. */
+export function validateUniqueLists(
+  schema: GraphQLSchema,
+  config: UniqueListsConfig | undefined,
+): void {
+  validateListFieldMap(
+    schema,
+    config,
+    'uniqueLists',
+    isUniqueListsFlag,
+    'uniqueLists only applies to list fields',
+  );
 }

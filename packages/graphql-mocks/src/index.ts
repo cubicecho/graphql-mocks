@@ -61,6 +61,8 @@ export type {
   ScalarMocker,
   Scenario,
   ScenarioMap,
+  StableIdsConfig,
+  UniqueListsConfig,
 } from './types.js';
 export { defaultScalarMockers, resolveScalarMocker } from './scalarMockers.js';
 export { createRequestHandler } from './requestHandler.js';

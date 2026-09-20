@@ -49,6 +49,54 @@ export type ListSizeConfig<TTypes extends Record<string, unknown> = Record<strin
   | ListSizeRangeConfig
   | (string extends keyof TTypes ? LooseListSizeMap : TypedListSizeMap<TTypes>);
 
+// Which of one type's list fields hold distinct values, keyed by field name, with a `_default`
+// for that type's other lists. Degrades to a loose record when the type's shape is unknown,
+// mirroring `TypeListSizes`.
+type TypeUniqueLists<T> = unknown extends T
+  ? { _default?: boolean } & Record<string, boolean>
+  : { _default?: boolean } & { [F in keyof T]?: boolean };
+
+/** The untyped `uniqueLists` map: any type name, any field name. */
+export interface LooseUniqueListsMap {
+  /** Applies to any scalar or enum list without a type- or field-level entry. */
+  _default?: boolean;
+  [typeName: string]: TypeUniqueLists<unknown> | boolean | undefined;
+}
+
+/** The `uniqueLists` map when a `TTypes` map is supplied: type and field names are checked. */
+export type TypedUniqueListsMap<TTypes extends Record<string, unknown>> = {
+  _default?: boolean;
+} & { [K in keyof TTypes]?: TypeUniqueLists<TTypes[K]> | boolean };
+
+/**
+ * Whether generated scalar and enum lists are drawn without replacement, resolved per field as
+ * `[type][field]` → `[type]._default` → `_default` → the flat form.
+ */
+export type UniqueListsConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> =
+  | boolean
+  | (string extends keyof TTypes ? LooseUniqueListsMap : TypedUniqueListsMap<TTypes>);
+
+/** The untyped `stableIds` map: extra identifier field names per type. */
+export interface LooseIdFieldsMap {
+  /** Identifier field names for every type the map does not name. */
+  _default?: readonly string[];
+  [typeName: string]: readonly string[] | undefined;
+}
+
+/**
+ * Which fields `stableIds` gives a stable, pool-unique value to: `true` for the ones it
+ * recognizes by name (`id`, and anything ending in `Id`/`ID`), or those plus the names listed —
+ * globally, or per type.
+ */
+export type StableIdsConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> =
+  | boolean
+  | readonly string[]
+  | (string extends keyof TTypes
+      ? LooseIdFieldsMap
+      : { _default?: readonly string[] } & {
+          [K in keyof TTypes]?: readonly (keyof TTypes[K] & string)[];
+        });
+
 /** Where an override is firing — the instance's position in its pool, and the field's site. */
 export interface OverrideContext {
   /** The owning instance's index in its own pool, the same index `stableIds` numbers with. */
@@ -533,6 +581,32 @@ export interface BuildMocksOptions<
    */
   listSize?: ListSizeConfig<TTypes>;
   /**
+   * Draw scalar and enum list fields **without replacement**, so a generated list holds no
+   * duplicate values — the treatment relationship lists have always had. On by default,
+   * because a list a consumer keys by (`tags.map(tag => <Chip key={tag}>)`) containing the
+   * same value twice is a defect wherever it surfaces.
+   *
+   * The length is clamped to the number of distinct values available, so a `[Status!]!` over a
+   * three-value enum yields at most three entries however large `listSize` is. A scalar
+   * generator has no countable set of values, so the draw is retried a bounded number of times
+   * per slot and the list comes back short if the generator keeps repeating itself.
+   *
+   * Turn it off globally with `false`, or per type and field with a map shaped like
+   * `listSize`:
+   *
+   * ```ts
+   * buildMocks(schema, { uniqueLists: false });                    // draw with replacement
+   * buildMocks(schema, { uniqueLists: { Post: { tags: false } } }); // just Post.tags
+   * ```
+   *
+   * QA mode turns this off by default: its corpora are deliberately tiny, so deduplicating
+   * would silently cap a `lists: 'huge'` profile at the size of the corpus. An explicit
+   * `uniqueLists` still applies under QA.
+   *
+   * @default true (false under `qa`)
+   */
+  uniqueLists?: UniqueListsConfig<TTypes>;
+  /**
    * Custom scalar mockers. Merged over the built-in defaults; user wins on conflicts.
    * Key is the scalar name as it appears in the schema.
    */
@@ -744,12 +818,30 @@ export interface BuildMocksOptions<
    */
   qa?: QaOption;
   /**
-   * Give every object with an `id` field a stable, unique id of the form `TypeName-<index>`
-   * instead of a random scalar value. Keeps cache keys distinct and output readable.
-   * An explicit `overrides` entry for `id` still wins.
+   * Give every object's identifier fields a stable, pool-unique value instead of a random
+   * scalar. Keeps cache keys distinct and output readable. An explicit `overrides` entry for
+   * the field still wins.
+   *
+   * `true` covers every field the library recognizes as an identifier by name: `id` (in any
+   * casing) and anything ending in `Id` or `ID` — `id` keeps the `TypeName-<index>` form, and
+   * any other field carries its own name too (`PaymentMethod-paymentMethodId-0`) so two
+   * identifier fields on one object never land on the same string.
+   *
+   * A schema whose identifier is named something else (`Currency.code`) can say so, either for
+   * every type or per type. Those names are covered *in addition* to the recognized ones:
+   *
+   * ```ts
+   * buildMocks(schema, { stableIds: ['code'] });
+   * buildMocks(schema, { stableIds: { Currency: ['code'], _default: [] } });
+   * ```
+   *
+   * Only string-valued scalar fields are replaced (`id` itself aside, which is assigned
+   * whatever it holds): writing `Currency-code-0` over an `Int` or an enum would produce data
+   * the schema rejects. Keep a recognized field random with an `overrides` entry for it.
+   *
    * @default false
    */
-  stableIds?: boolean;
+  stableIds?: StableIdsConfig<TTypes>;
   /**
    * Prefix stable ids with this string, giving `<prefix>User-0` instead of `User-0`. Only
    * meaningful with `stableIds`, and there only to keep ids from colliding across pools

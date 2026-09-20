@@ -1,3 +1,4 @@
+import type { Faker } from '@faker-js/faker';
 import {
   type GraphQLNamedType,
   type GraphQLObjectType,
@@ -7,8 +8,9 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
+import type { ListSizeRange } from './helpers.js';
 import { qaFallbackText } from './qa.js';
-import { type ResolvedOptions, listSizeFor } from './resolveOptions.js';
+import { type ResolvedOptions, listSizeFor, uniqueListFor } from './resolveOptions.js';
 import { resolveScalarMocker } from './scalarMockers.js';
 
 export interface UnwrappedType {
@@ -42,6 +44,66 @@ export function unwrapType(type: GraphQLType): UnwrappedType {
   }
 
   return { namedType: current as GraphQLNamedType, isRequired, isList };
+}
+
+/**
+ * How many times a unique scalar list re-draws for one slot before giving up on it.
+ *
+ * A scalar generator has no enumerable set of values, so "without replacement" can only be
+ * "retry on a collision" — and a generator that returns a constant (a QA text profile, a
+ * caller's `scalars` entry) would spin forever against an unbounded loop. Twelve consecutive
+ * collisions is already vanishingly unlikely for anything with a real corpus behind it, so in
+ * practice this bound is only ever reached by generators that genuinely cannot fill the list.
+ */
+const UNIQUE_DRAW_ATTEMPTS = 12;
+
+/**
+ * An identity for the dedupe set. Primitives key by type and value so `1` and `'1'` stay
+ * distinct; anything else keys by its JSON form, which is what makes two structurally equal
+ * `JSON` scalar values count as one.
+ */
+function valueKey(value: unknown, fallbackIndex: number): string {
+  if (value === null || typeof value !== 'object') return `${typeof value}:${String(value)}`;
+  try {
+    return `object:${JSON.stringify(value)}`;
+  } catch {
+    // Cyclic, or holding a BigInt. Nothing to compare it by, so treat it as its own value
+    // rather than collapsing every such draw into one entry.
+    return `unserializable:${fallbackIndex}`;
+  }
+}
+
+/**
+ * Draw a scalar list of the size `bounds` asks for.
+ *
+ * With `unique`, repeats are dropped and the list comes back short when the generator runs out
+ * of distinct values — the same way a relationship list comes back short when its pool can't
+ * fill it. Without it, every slot is an independent draw, which is what this always did.
+ */
+export function drawScalarList(
+  faker: Faker,
+  bounds: ListSizeRange,
+  unique: boolean,
+  draw: () => unknown,
+): unknown[] {
+  const count = faker.number.int(bounds);
+  if (!unique) return Array.from({ length: count }, draw);
+
+  const values: unknown[] = [];
+  const seen = new Set<string>();
+  for (let slot = 0; slot < count; slot++) {
+    let filled = false;
+    for (let attempt = 0; attempt < UNIQUE_DRAW_ATTEMPTS && !filled; attempt++) {
+      const value = draw();
+      const key = valueKey(value, slot);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      values.push(value);
+      filled = true;
+    }
+    if (!filled) break;
+  }
+  return values;
 }
 
 /**
@@ -85,15 +147,25 @@ export function mockTypeScalars(
     // Sized per field rather than once per type: a `listSize` entry can name this exact field,
     // and the same lookup sizes relationship and root lists, so one lever reaches all three.
     const listLength = listSizeFor(typeDef.name, fieldName, resolved);
+    const unique = isList && uniqueListFor(typeDef.name, fieldName, resolved);
 
     if (isEnumType(namedType)) {
       const values = namedType.getValues();
       if (isList) {
-        const count = faker.number.int(listLength);
-        result[fieldName] = Array.from(
-          { length: count },
-          () => faker.helpers.arrayElement(values)?.value ?? null,
-        );
+        // An enum has a countable set of values, so a unique list is the same without-replacement
+        // sample a relationship list takes — clamped to what exists, which is why a four-value
+        // `listSize` over a three-value enum yields three entries rather than repeating one.
+        result[fieldName] = unique
+          ? faker.helpers
+              .arrayElements(values, {
+                min: Math.min(listLength.min, values.length),
+                max: Math.min(listLength.max, values.length),
+              })
+              .map((value) => value.value)
+          : Array.from(
+              { length: faker.number.int(listLength) },
+              () => faker.helpers.arrayElement(values)?.value ?? null,
+            );
       } else {
         result[fieldName] = faker.helpers.arrayElement(values)?.value ?? null;
       }
@@ -108,14 +180,12 @@ export function mockTypeScalars(
       // An unrecognized scalar is almost always string-shaped, so a text profile should
       // reach it too — otherwise QA mode quietly skips every custom scalar in the schema.
       const fallback = () => qaFallbackText(faker, qa) ?? faker.lorem.word();
-      result[fieldName] = isList
-        ? Array.from({ length: faker.number.int(listLength) }, fallback)
-        : fallback();
+      result[fieldName] = isList ? drawScalarList(faker, listLength, unique, fallback) : fallback();
       continue;
     }
 
     result[fieldName] = isList
-      ? Array.from({ length: faker.number.int(listLength) }, () => mocker(faker))
+      ? drawScalarList(faker, listLength, unique, () => mocker(faker))
       : mocker(faker);
   }
 

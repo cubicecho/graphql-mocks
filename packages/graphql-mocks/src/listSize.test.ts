@@ -91,7 +91,11 @@ describe('lookupListSize', () => {
 describe('listSize on scalar and enum lists', () => {
   it('sizes them from the flat form, which used to miss them entirely', () => {
     expect(lengths({ listSize: 4 }, 'tags')).toEqual([4, 4, 4]);
-    expect(lengths({ listSize: 4 }, 'colours')).toEqual([4, 4, 4]);
+    // `Colour` has three values and lists are drawn without replacement, so the size is clamped
+    // to what exists — a fourth entry could only be a repeat. `uniqueLists: false` asks for the
+    // repeat back. See `uniqueLists.test.ts`.
+    expect(lengths({ listSize: 4 }, 'colours')).toEqual([3, 3, 3]);
+    expect(lengths({ listSize: 4, uniqueLists: false }, 'colours')).toEqual([4, 4, 4]);
   });
 
   it('sizes one named field, leaving the type other lists alone', () => {

@@ -1,4 +1,4 @@
-import { isListSizeRange } from './helpers.js';
+import { isListSizeRange, isUniqueListsFlag } from './helpers.js';
 import { expandQaOption, qaScalarMockers, resolveQa } from './qa.js';
 import type {
   BuildMocksOptions,
@@ -7,6 +7,7 @@ import type {
   QaOption,
   Scenario,
   ScenarioMap,
+  UniqueListsConfig,
 } from './types.js';
 
 /** Anything merged here is a partial build config; `description` rides along untouched. */
@@ -34,6 +35,16 @@ function mergeListSize(
   if (isListSizeRange(next) || base === undefined) return next;
   if (isListSizeRange(base)) return { _default: base, ...(next as Layer) } as ListSizeConfig;
   return mergeTwoLevel(base, next) as ListSizeConfig;
+}
+
+/** Same shape as `listSize`, with `true`/`false` in place of the flat size. */
+function mergeUniqueLists(
+  base: UniqueListsConfig | undefined,
+  next: UniqueListsConfig,
+): UniqueListsConfig {
+  if (isUniqueListsFlag(next) || base === undefined) return next;
+  if (isUniqueListsFlag(base)) return { _default: base, ...(next as Layer) } as UniqueListsConfig;
+  return mergeTwoLevel(base, next) as UniqueListsConfig;
 }
 
 /**
@@ -115,6 +126,12 @@ export function mergeScenarios<TTypes extends Record<string, unknown> = Record<s
           merged.listSize = mergeListSize(
             merged.listSize as ListSizeConfig | undefined,
             value as ListSizeConfig,
+          );
+          break;
+        case 'uniqueLists':
+          merged.uniqueLists = mergeUniqueLists(
+            merged.uniqueLists as UniqueListsConfig | undefined,
+            value as UniqueListsConfig,
           );
           break;
         case 'scalars':
