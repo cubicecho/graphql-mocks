@@ -138,9 +138,11 @@ export function mergeScenarios<TTypes extends Record<string, unknown> = Record<s
           merged.scalars = { ...(merged.scalars as Layer), ...(value as Layer) };
           scalarsAt = index;
           break;
-        // One level deep: the key *is* the field name, so there is no per-type level to merge.
+        // One level deep: the value under each key is a single function, so there is no second
+        // level to merge — `fieldOverrides` is keyed by field, `deriveObject` by type.
+        case 'deriveObject':
         case 'fieldOverrides':
-          merged.fieldOverrides = { ...(merged.fieldOverrides as Layer), ...(value as Layer) };
+          merged[key] = { ...(merged[key] as Layer), ...(value as Layer) };
           break;
         case 'aliases':
         case 'countFields':

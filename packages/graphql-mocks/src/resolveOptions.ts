@@ -27,6 +27,7 @@ import type {
   FieldOverridesConfig,
   ListSizeConfig,
   LooseIdFieldsMap,
+  ObjectDeriveConfig,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
@@ -104,6 +105,8 @@ export interface ResolvedOptions {
   aliases: AliasesConfig | undefined;
   /** Field functions run after the graph is complete, so they see the finished object. */
   derive: DeriveConfig | undefined;
+  /** Per-type functions returning a partial merged over the instance, just before `derive`. */
+  deriveObject: ObjectDeriveConfig | undefined;
   /**
    * Pair count scalars with the lists they count outside QA mode. Left as given: `countFields.ts`
    * folds it together with `qa.countFields` at the point of use, since either can turn the pass
@@ -147,6 +150,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     fieldOverrides: options.fieldOverrides,
     aliases: options.aliases,
     derive: options.derive,
+    deriveObject: options.deriveObject,
     countFields: options.countFields,
     relations: options.relations,
     resolveType: options.resolveType,

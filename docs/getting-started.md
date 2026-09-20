@@ -181,6 +181,11 @@ rebuild — that is what `build` and `qa` parameters act on. The decorator stays
 React-free on purpose (the renderer churns across Storybook majors), so `wrap` is
 yours; the parameter parsing, the scenario states and the client memo are not.
 
+When a set of stories varies one shared base parameter, derive it with
+`withState(base, 'loading')` / `withQa(base, 'longText')` rather than re-stating
+a short form — those keep the base's `overrides`, `target` and `build`, which
+`'loading'` on its own silently drops.
+
 ## 4. Type the pools
 
 Pools are `unknown[]` until you say otherwise. Pass a type map:
