@@ -402,6 +402,53 @@ describe('withGraphqlMocks', () => {
     expect(clientFrom(predicate)).not.toBe(clientFrom(predicate));
   });
 
+  it('gives every story its own client, so no story renders from another story cache', () => {
+    const decorator = withGraphqlMocks(graph(), { wrap });
+    const clientForStory = (id: string) =>
+      (decorator(() => 'story', { id, parameters: {} }) as { client: MockApolloClient }).client;
+
+    // The parameter is the default for both stories, which is exactly the case that used to
+    // collapse onto one client, and so onto one InMemoryCache.
+    expect(clientForStory('screen--default')).not.toBe(clientForStory('screen--empty'));
+    expect(clientForStory('screen--default').cache).not.toBe(clientForStory('screen--empty').cache);
+    // A re-render of one story still reuses its client rather than refetching into a fresh cache.
+    expect(clientForStory('screen--default')).toBe(clientForStory('screen--default'));
+  });
+
+  it('keeps one client per story per parameter, so a control knob does not reuse a stale one', () => {
+    const decorator = withGraphqlMocks(graph(), { wrap });
+    const clientForStory = (id: string, graphqlMocks: unknown) =>
+      (
+        decorator(() => 'story', { id, parameters: { graphqlMocks } }) as {
+          client: MockApolloClient;
+        }
+      ).client;
+
+    expect(clientForStory('screen--slow', { delay: 1 })).not.toBe(
+      clientForStory('screen--slow', { delay: 2 }),
+    );
+    expect(clientForStory('screen--slow', { delay: 1 })).toBe(
+      clientForStory('screen--slow', { delay: 1 }),
+    );
+  });
+
+  it('shares one client across the stories a clientKey groups together', () => {
+    const decorator = withGraphqlMocks(graph(), {
+      wrap,
+      clientKey: (context) => context.title,
+    });
+    const clientForStory = (title: string, id: string) =>
+      (decorator(() => 'story', { id, title, parameters: {} }) as { client: MockApolloClient })
+        .client;
+
+    expect(clientForStory('Screen', 'screen--default')).toBe(
+      clientForStory('Screen', 'screen--empty'),
+    );
+    expect(clientForStory('Screen', 'screen--default')).not.toBe(
+      clientForStory('Other', 'other--default'),
+    );
+  });
+
   it('passes decorator options down as the base configuration', async () => {
     const decorator = withGraphqlMocks(graph(), { wrap, matchArguments: true });
     const result = decorator(() => 'story', { parameters: {} }) as { client: MockApolloClient };
