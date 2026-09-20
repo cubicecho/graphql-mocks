@@ -2,6 +2,7 @@ import { ApolloClient, ApolloLink, InMemoryCache, Observable } from '@apollo/cli
 import { type ScenarioTarget, mockScenarios } from '../mockScenarios.js';
 import type { MockHandlerOptions, MockRequestHandler } from '../requestHandler.js';
 import type { BuildMocksOptions, MockResult, QaOption } from '../types.js';
+import { toMockClientParameter } from './parameter.js';
 
 /**
  * Wrap a mock graph (or an existing handler) in an `ApolloLink`, so an `ApolloClient` resolves
@@ -254,11 +255,7 @@ export interface MockClientParameter extends CreateMockClientOptions {
 /** What a story may set the parameter to. `false` means "no mock client for this story". */
 export type MockClientOption = boolean | MockClientState | MockClientParameter;
 
-function normalizeParameter(parameter: MockClientOption | undefined): MockClientParameter {
-  if (parameter === undefined || typeof parameter === 'boolean') return {};
-  if (typeof parameter === 'string') return { state: parameter };
-  return parameter;
-}
+export { toMockClientParameter, withQa, withState } from './parameter.js';
 
 function graphFor(source: MockClientSource, parameter: MockClientParameter): MockClientSource {
   const wantsBuild = parameter.build !== undefined || parameter.qa !== undefined;
@@ -299,13 +296,13 @@ export function resolveMockClient(
     build: _build,
     qa: _qa,
     ...options
-  } = normalizeParameter(parameter);
+  } = toMockClientParameter(parameter);
   const { cache, link, defaultOptions, clientOptions, ...handler } = { ...base, ...options };
   const scenario = mockScenarios(
     { ...handler, overrides: [...(options.overrides ?? []), ...(base.overrides ?? [])] },
     target,
   )[state];
-  return createMockClient(graphFor(source, normalizeParameter(parameter)), {
+  return createMockClient(graphFor(source, toMockClientParameter(parameter)), {
     ...scenario,
     cache,
     link,
