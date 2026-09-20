@@ -686,8 +686,20 @@ or `false` to opt one story out. Options passed to `withGraphqlMocks` itself are
 story is layered over — plain options key by key, `overrides` concatenated with the story's first.
 
 `build` and `qa` need the factory form of the source (as above); with an already-built graph
-there's nothing to rebuild and they warn. Clients are memoized per resolved parameter, so a
-control knob re-rendering a story reuses its client instead of remounting into a fresh cache.
+there's nothing to rebuild and they warn.
+
+Clients are memoized per story (`context.id`) and resolved parameter, so a control knob
+re-rendering a story reuses its client instead of remounting into a fresh cache, while every
+story still gets its own `InMemoryCache` — one story's mutation or paged list never answers the
+next story's query. Where a set of stories genuinely wants one shared client, say so with
+`clientKey`, which replaces the story identity in that memo key:
+
+```tsx
+withGraphqlMocks(factory, {
+  wrap,
+  clientKey: (context) => context.title, // one client per stories file
+});
+```
 
 `resolveMockClient(source, parameter, base)` is the same resolution without the decorator, for
 a renderer `wrap` doesn't fit.
