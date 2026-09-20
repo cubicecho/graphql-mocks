@@ -1,3 +1,10 @@
+# [4.2.0](https://github.com/cubicecho/graphql-mocks/compare/v4.1.0...v4.2.0) (2026-09-20)
+
+
+### Features
+
+* **graphql-mocks:** derive a whole object, for fields from one draw ([9300b0f](https://github.com/cubicecho/graphql-mocks/commit/9300b0f902a96bfed8f8683a0edeb55600b56e5e)), closes [#68](https://github.com/cubicecho/graphql-mocks/issues/68) [#61](https://github.com/cubicecho/graphql-mocks/issues/61)
+
 # [4.1.0](https://github.com/cubicecho/graphql-mocks/compare/v4.0.1...v4.1.0) (2026-09-20)
 
 
