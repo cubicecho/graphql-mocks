@@ -69,9 +69,11 @@ Three options are worth setting from the start:
   test is a coin flip.
 - **`count`** sizes the pools: a number for every type, or
   `{ User: 10, Todo: 50, _default: 5 }` per type.
-- **`stableIds`** turns `id` fields into readable `User-0`, `User-1` values
+- **`stableIds`** turns identifier fields into readable, collision-free values
   instead of random scalars, which is what makes `byId` and argument matching
-  pleasant to write by hand.
+  pleasant to write by hand. `id` becomes `User-0`, `User-1`; any other field the
+  library reads as an identifier (`paymentMethodId`, or a name you list yourself
+  with `stableIds: ['code']`) becomes `PaymentMethod-paymentMethodId-0`.
 
 ## 2. Answer an operation
 
@@ -254,6 +256,12 @@ buildMocks(schema, {
 A flat `listSize: 3` or `listSize: { min: 2, max: 4 }` still covers everything.
 A named entry beats the QA `lists` profile; a `relations` entry beats both for a
 relationship field. `listSize` never grows a pool — raise `count` for that.
+
+Those lists hold **distinct** values: scalar and enum lists are drawn without
+replacement, like relationship lists, so nothing a component keys by repeats. The
+length gives way to that — `colours: [Colour!]!` over a three-value enum yields
+at most three entries whatever `listSize` says. `uniqueLists: false`, or
+`uniqueLists: { Post: { tags: false } }`, asks for the repeats back.
 
 For wrapper and connection types, `countFields: true` pairs each count scalar
 with the list it counts and sizes that list to the pool, so `totalCount` is a

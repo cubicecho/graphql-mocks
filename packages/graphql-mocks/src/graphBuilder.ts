@@ -18,7 +18,12 @@ import {
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { expandFieldOverrides } from './fieldOverrides.js';
-import { OPERATION_TYPE_NAMES, resolveCount, validateListSize } from './helpers.js';
+import {
+  OPERATION_TYPE_NAMES,
+  resolveCount,
+  validateListSize,
+  validateUniqueLists,
+} from './helpers.js';
 import {
   type OperationMocks,
   type OperationModule,
@@ -40,7 +45,12 @@ import {
   type MockRequestHandler,
   createRequestHandler,
 } from './requestHandler.js';
-import { type ResolvedOptions, listSizeFor, resolveOptions } from './resolveOptions.js';
+import {
+  type ResolvedOptions,
+  isStableIdField,
+  listSizeFor,
+  resolveOptions,
+} from './resolveOptions.js';
 import { mockTypeScalars, unwrapType } from './typeMocker.js';
 import type { BuildMocksOptions, FieldDeriveFn, MockResult, RelationSpec } from './types.js';
 
@@ -453,10 +463,48 @@ function applyDerive(
   }
 }
 
+/**
+ * Give one instance's identifier fields a stable, pool-unique value.
+ *
+ * `id` keeps the `TypeName-<index>` form it has always had. Any other identifier field carries
+ * its own name as well, so an object with both `id` and `paymentMethodId` doesn't get the same
+ * string twice — two fields that are supposed to identify different things, holding one value,
+ * is the confusion this option exists to remove.
+ *
+ * Only string-valued scalars are replaced beyond `id` itself: the widened set is matched by
+ * name, and writing `Order-externalId-0` over an `Int` or an enum would hand back data the
+ * schema rejects. An `overrides` entry for the field still wins, and is the way to keep a
+ * recognized field random.
+ */
+function applyStableIds(
+  instance: Record<string, unknown>,
+  objectType: GraphQLObjectType,
+  index: number,
+  resolved: ResolvedOptions,
+): void {
+  const { idPrefix } = resolved;
+  const overrides = resolved.overrides[objectType.name] ?? {};
+
+  for (const [fieldName, field] of Object.entries(objectType.getFields())) {
+    if (!(fieldName in instance) || overrides[fieldName] !== undefined) continue;
+
+    if (fieldName === 'id') {
+      instance.id = `${idPrefix}${objectType.name}-${index}`;
+      continue;
+    }
+    if (!isStableIdField(objectType.name, fieldName, resolved)) continue;
+
+    const { namedType, isList } = unwrapType(field.type);
+    if (isList || !isScalarType(namedType) || typeof instance[fieldName] !== 'string') continue;
+    instance[fieldName] = `${idPrefix}${objectType.name}-${fieldName}-${index}`;
+  }
+}
+
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
   validateListSize(schema, resolved.listSizes);
+  validateUniqueLists(schema, resolved.uniqueListsConfig);
   validateAliases(schema, resolved.aliases);
   const { faker, qa, nullChance } = resolved;
 
@@ -468,7 +516,7 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   );
 
   // Phase 1: generate N instances per type with scalar/enum fields only
-  const { addTypename, stableIds, idPrefix } = resolved;
+  const { addTypename, stableIds } = resolved;
   const demand = relationDemand(schema, resolved.relations, resolved.resolveType);
   const pool: Record<string, Record<string, unknown>[]> = {};
   for (const objectType of objectTypes) {
@@ -480,13 +528,10 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
       resolved.count,
       Math.max(resolved.defaultCount, demand[objectType.name] ?? 0),
     );
-    const idOverridden = resolved.overrides[objectType.name]?.id !== undefined;
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
       const instance = mockTypeScalars(objectType, resolved, index);
       if (addTypename) instance.__typename = objectType.name;
-      if (stableIds && !idOverridden && 'id' in instance) {
-        instance.id = `${idPrefix}${objectType.name}-${index}`;
-      }
+      if (stableIds) applyStableIds(instance, objectType, index, resolved);
       return instance;
     });
   }

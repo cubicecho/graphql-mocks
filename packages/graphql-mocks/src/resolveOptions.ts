@@ -1,6 +1,13 @@
 import type { Faker } from '@faker-js/faker';
 import type { ArgMatchingOptions } from './argMatching.js';
-import { type ListSizeRange, lookupListSize, resolveFaker, resolveListSize } from './helpers.js';
+import {
+  type ListSizeRange,
+  lookupListSize,
+  lookupUniqueLists,
+  resolveFaker,
+  resolveListSize,
+  resolveUniqueLists,
+} from './helpers.js';
 import {
   type ResolvedQa,
   qaDefaultCount,
@@ -19,9 +26,11 @@ import type {
   DeriveConfig,
   FieldOverridesConfig,
   ListSizeConfig,
+  LooseIdFieldsMap,
   OverridesConfig,
   RelationsConfig,
   ScalarMocker,
+  UniqueListsConfig,
 } from './types.js';
 
 /**
@@ -47,6 +56,22 @@ export interface ResolvedOptions {
   nullChance: number;
   addTypename: boolean;
   stableIds: boolean;
+  /**
+   * The field names `stableIds` covers on top of the ones it recognizes by name, as written —
+   * a flat list, or one per type. Undefined when `stableIds` is a plain boolean.
+   */
+  idFields: readonly string[] | LooseIdFieldsMap | undefined;
+  /**
+   * Catch-all for whether scalar and enum lists are drawn without replacement: the flat
+   * `uniqueLists` form, or the map's top-level `_default`. Defaults to `true`, and to `false`
+   * under QA mode, whose corpora are too small to dedupe against.
+   */
+  uniqueLists: boolean;
+  /**
+   * The `uniqueLists` config as written, kept so {@link uniqueListFor} can read the entries
+   * that name a type or a field — those apply whether or not QA mode is on.
+   */
+  uniqueListsConfig: UniqueListsConfig | undefined;
   /**
    * Catch-all sizing for every generated list: the flat `listSize` form, or the map's
    * top-level `_default`. A QA list profile and a `relations` entry are both more specific
@@ -98,6 +123,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
   const options = applyScenarios(rawOptions);
   const faker = resolveFaker(options);
   const qa = resolveQa(options.qa);
+  const stableIds = options.stableIds ?? false;
 
   return {
     faker,
@@ -105,7 +131,12 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     defaultCount: qaDefaultCount(qa, 5),
     nullChance: qaNullChance(qa) ?? options.nullChance ?? 0,
     addTypename: options.addTypename ?? true,
-    stableIds: options.stableIds ?? false,
+    stableIds: stableIds !== false,
+    idFields: typeof stableIds === 'boolean' ? undefined : stableIds,
+    // QA mode draws from deliberately tiny corpora, so deduplicating there would silently cap a
+    // `lists: 'huge'` profile at the size of the corpus — the opposite of what it asks for.
+    uniqueLists: resolveUniqueLists(options.uniqueLists, qa === undefined),
+    uniqueListsConfig: options.uniqueLists,
     listSize: resolveListSize(options.listSize),
     listSizes: options.listSize,
     matchArguments: options.matchArguments,
@@ -142,4 +173,48 @@ export function listSizeFor(
     lookupListSize(typeName, fieldName, resolved.listSizes) ??
     qaListLength(resolved.qa, resolved.listSize)
   );
+}
+
+/**
+ * Whether one scalar or enum list field is drawn without replacement. An entry naming the type
+ * (and optionally the field) is a deliberate statement about that field, so it outranks the
+ * catch-all — including the QA-driven one, the same way a named `listSize` outranks a QA list
+ * profile.
+ */
+export function uniqueListFor(
+  typeName: string,
+  fieldName: string,
+  resolved: ResolvedOptions,
+): boolean {
+  return lookupUniqueLists(typeName, fieldName, resolved.uniqueListsConfig) ?? resolved.uniqueLists;
+}
+
+/**
+ * Whether a field name reads as an identifier: `id` in any casing, or a name ending in `Id`
+ * or `ID` (`paymentMethodId`, `orderID`). This is a naming convention rather than a schema
+ * fact — the length guard keeps it off two-letter names that merely end in those letters.
+ */
+export function isIdFieldName(fieldName: string): boolean {
+  if (fieldName.toLowerCase() === 'id') return true;
+  return fieldName.length > 2 && (fieldName.endsWith('Id') || fieldName.endsWith('ID'));
+}
+
+/**
+ * Whether `stableIds` gives this field a stable value. The names it recognizes by convention
+ * and the names the caller listed are a union, not alternatives: a schema that has to name
+ * `code` still wants its `id` fields numbered.
+ */
+export function isStableIdField(
+  typeName: string,
+  fieldName: string,
+  resolved: ResolvedOptions,
+): boolean {
+  if (isIdFieldName(fieldName)) return true;
+
+  const { idFields } = resolved;
+  if (idFields === undefined) return false;
+  const named = Array.isArray(idFields)
+    ? idFields
+    : ((idFields as LooseIdFieldsMap)[typeName] ?? (idFields as LooseIdFieldsMap)._default ?? []);
+  return named.includes(fieldName);
 }
