@@ -4,9 +4,11 @@ import type {
   CountFieldsConfig,
   DeriveConfig,
   DeriveContext,
+  FakerPath,
   FieldDeriveFn,
   OverridesConfig,
   PaginateArgsOptions,
+  ScalarPathRecords,
 } from './index.js';
 
 // The public surface has no other guardrail — index.ts is excluded from coverage and nothing
@@ -23,6 +25,7 @@ const EXPORTS = [
   'buildMatrix',
   'buildMocks',
   'buildQaSets',
+  'buildScalarsFromPaths',
   'composeScenarios',
   'createRequestHandler',
   'dataOf',
@@ -36,6 +39,7 @@ const EXPORTS = [
   'qaScalarMockers',
   'resolveRelation',
   'resolveScalarMocker',
+  'scalarFromPath',
   'searchItems',
   'select',
   'toPlain',
@@ -53,6 +57,8 @@ const derive: DeriveConfig = {
 const fullName: FieldDeriveFn = (self) => String(self.firstName);
 const overrides: OverridesConfig = { User: { firstName: () => 'Ada' } };
 const paginateOptions: PaginateArgsOptions = { searchFields: ['title'], defaultLimit: 10 };
+const emailPath: FakerPath = 'internet.email';
+const scalarPaths: ScalarPathRecords = { EmailAddress: emailPath };
 
 describe('index', () => {
   it('exports exactly the documented runtime surface', () => {
@@ -71,5 +77,6 @@ describe('index', () => {
     expect(typeof fullName).toBe('function');
     expect(Object.keys(overrides)).toEqual(['User']);
     expect(paginateOptions.defaultLimit).toBe(10);
+    expect(scalarPaths).toEqual({ EmailAddress: 'internet.email' });
   });
 });

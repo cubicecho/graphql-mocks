@@ -65,6 +65,13 @@ export type {
   UniqueListsConfig,
 } from './types.js';
 export { defaultScalarMockers, resolveScalarMocker } from './scalarMockers.js';
+export { buildScalarsFromPaths, scalarFromPath } from './scalarFromPath.js';
+export type {
+  FakerPath,
+  ScalarFromPathOptions,
+  ScalarPathRecords,
+  ScalarPathSpec,
+} from './scalarFromPath.js';
 export { createRequestHandler } from './requestHandler.js';
 export type {
   MockErrorInput,
