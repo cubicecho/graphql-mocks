@@ -950,6 +950,37 @@ the matcher's default, with a top-level name beating a nested one. A null or wro
 argument reads as absent, and with no page size at all the result is unpaged rather than empty.
 It takes the override context, or any `{ args }` object.
 
+#### `totalField`: the total on the row
+
+Not every paginated field has a wrapper to put the total in. A flattened group-by returns a bare
+list, so the total is repeated on every row:
+
+```graphql
+type OrderCountByStatus {
+  status: OrderStatus!
+  count: Int!
+  totalCount: Int!   # the unpaged total, repeated on every row
+}
+```
+
+`totalField` stamps `matchedCount` onto each returned row under that name, so the handler stays
+one call instead of a `.map` afterwards:
+
+```ts
+data: (ctx) => paginateArgs(rows, ctx, { searchFields: ['status'], totalField: 'totalCount' }).items;
+```
+
+`items` is still the return value, so nothing changes for callers that don't pass it. This is the
+row-level counterpart to [`countFields`](#counts-that-agree-with-their-lists) —
+same rule, different place to put the number.
+
+Stamped rows are **shallow copies**: pooled objects are shared with everything that relates to
+them, so writing one page's total into a row would make it the answer everywhere that row is
+reachable from. A value already under that name is overwritten — on this shape it's a
+schema-mocked `Int`, which is exactly the stale number the option exists to replace — and a row
+that isn't an object passes through untouched. When the name is a string literal it lands on the
+element type too, so `row.totalCount` typechecks.
+
 ## QA mode
 
 Mocks are realistic by default, and realistic data never finds the bug where a 400-character

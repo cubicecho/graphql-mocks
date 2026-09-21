@@ -275,6 +275,88 @@ describe('paginateArgs', () => {
     expect(data.posts).toHaveLength(3);
   });
 
+  describe('totalField', () => {
+    const rows = [
+      { status: 'OPEN', count: 3, totalCount: 999 },
+      { status: 'CLOSED', count: 2, totalCount: 999 },
+      { status: 'OPEN_LATE', count: 1, totalCount: 999 },
+    ];
+
+    it('stamps the matched count on every row of the page', () => {
+      const result = paginateArgs(
+        rows,
+        { args: { search: 'open', limit: 1 } },
+        {
+          searchFields: ['status'],
+          totalField: 'totalCount',
+        },
+      );
+
+      expect(result.items).toEqual([{ status: 'OPEN', count: 3, totalCount: 2 }]);
+      // The page holds one row; the number on it is what the search left, not what it returned.
+      expect(result.matchedCount).toBe(2);
+    });
+
+    it('copies each row instead of writing into the pooled object', () => {
+      const result = paginateArgs(rows, { args: {} }, { totalField: 'totalCount' });
+
+      expect(result.items[0]).not.toBe(rows[0]);
+      expect(rows[0]?.totalCount).toBe(999);
+    });
+
+    it('overwrites the mocked value already sitting under that name', () => {
+      const result = paginateArgs(rows, { args: {} }, { totalField: 'totalCount' });
+
+      expect(result.items.map((row) => row.totalCount)).toEqual([3, 3, 3]);
+    });
+
+    it('adds a name the row does not have yet', () => {
+      const result = paginateArgs(rows, { args: { skip: 2 } }, { totalField: 'pageTotal' });
+
+      expect(result.items).toEqual([
+        { status: 'OPEN_LATE', count: 1, totalCount: 999, pageTotal: 3 },
+      ]);
+      // Typed, not just present: the stamped name is on the element type.
+      expect(result.items[0]?.pageTotal).toBe(3);
+    });
+
+    it('passes a row that is not an object through untouched', () => {
+      const result = paginateArgs(['a', 'b'], { args: {} }, { totalField: 'totalCount' });
+
+      expect(result.items).toEqual(['a', 'b']);
+    });
+
+    it('leaves the rows alone when no name is given', () => {
+      const result = paginateArgs(rows, { args: {} });
+
+      expect(result.items[0]).toBe(rows[0]);
+    });
+
+    it('answers a flattened aggregate field end to end', () => {
+      const mocks = buildMocks(schema, {
+        seed: 4,
+        matchArguments: true,
+        argOverrides: [
+          {
+            match: { type: 'Query', field: 'posts' },
+            data: (ctx) =>
+              paginateArgs(ctx.pool as { id: string }[], ctx, { totalField: 'viewCount' }).items,
+          },
+        ],
+        count: { Post: 5 },
+      });
+
+      const data = mocks.dataForOperation(
+        parse('query Posts($take: Int) { posts(take: $take) { id viewCount } }'),
+        { take: 2 },
+      ) as { posts: { id: string; viewCount: number }[] };
+
+      expect(data.posts).toHaveLength(2);
+      // The mocked viewCount on each pooled post is replaced by the unpaged total.
+      expect(data.posts.map((post) => post.viewCount)).toEqual([5, 5]);
+    });
+  });
+
   it('shares the argument names the matcher uses', () => {
     expect(DEFAULT_OFFSET_ARGS).toContain('skip');
     expect(DEFAULT_LIMIT_ARGS).toContain('take');
