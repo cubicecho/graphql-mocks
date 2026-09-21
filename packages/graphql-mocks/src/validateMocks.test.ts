@@ -3,7 +3,8 @@ import { buildSchema, parse } from 'graphql';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockOperation, mockOperationVariants } from './apolloMocks.js';
 import { buildMocks } from './mockSchema.js';
-import { assertValidMocks, validateMocks } from './validateMocks.js';
+import { buildOperationMocks } from './operationsFrom.js';
+import { assertValidMocks, containsMocks, validateMocks } from './validateMocks.js';
 
 const UserQuery = parse('query User($id: ID!) { user(id: $id) { id name } }') as TypedDocumentNode<
   { user: { id: string; name: string } },
@@ -316,6 +317,119 @@ describe('a mockOperationsFrom map', () => {
     const mocks = buildMocks(schema, { seed: 2, count: 2 });
     const issues = validateMocks({ userMocks: mocks.mockOperationsFrom({ NOPE: 1 } as never) });
     expect(issues[0]?.kind).toBe('empty');
+  });
+});
+
+describe('validateMocks with allowEmpty', () => {
+  it('drops the empty report, so a fixture module passes a glob-wide check', () => {
+    expect(validateMocks({ tableRows: [{ id: 1 }], title: 'x' }, { allowEmpty: true })).toEqual([]);
+  });
+
+  it('still reports the real problems in a module that does hold mocks', () => {
+    const issues = validateMocks(
+      { m: { request: { query: UserQuery }, result: {} } },
+      {
+        allowEmpty: true,
+      },
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.kind).toBe('invalid');
+  });
+
+  it('reports empty by default, which is what catches a module losing its mocks', () => {
+    expect(validateMocks({ tableRows: [{ id: 1 }] })[0]?.kind).toBe('empty');
+  });
+});
+
+describe('containsMocks', () => {
+  const graphSchema = buildSchema(`
+    type User { id: ID!, name: String! }
+    type Category { id: ID!, name: String!, products: [Product!]! }
+    type Product { id: ID!, name: String!, category: Category! }
+    type Query { users: [User!]!, products: [Product!]! }
+  `);
+  const documents = {
+    UsersDocument: parse('query Users { users { id name } }'),
+    TodosDocument: parse('query Users2 { users { id } }'),
+    NOT_A_DOCUMENT: 'ignore me',
+  };
+
+  it('is true for one mock, an array, a variants trio and a module namespace', () => {
+    expect(containsMocks(validMock())).toBe(true);
+    expect(containsMocks([validMock()])).toBe(true);
+    expect(containsMocks(mockOperationVariants(UserQuery, { user: { id: '1', name: 'A' } }))).toBe(
+      true,
+    );
+    expect(containsMocks({ userMocks: { byName: [validMock()] } })).toBe(true);
+  });
+
+  it('is false for a fixture-only module, which is what a glob picks up', () => {
+    expect(containsMocks({ series: [{ x: 1, y: 2 }], title: 'Sales', render: () => null })).toBe(
+      false,
+    );
+    expect(containsMocks({})).toBe(false);
+    expect(containsMocks(undefined)).toBe(false);
+    expect(containsMocks('mocks')).toBe(false);
+  });
+
+  it('is true for a mock that is broken but present, so filtering never hides a defect', () => {
+    // The whole point of filtering by this before validating: an invalid mock must stay in.
+    const broken = { brokenMocks: { request: { query: UserQuery }, result: {} } };
+    expect(containsMocks(broken)).toBe(true);
+    expect(validateMocks(broken)).toHaveLength(1);
+  });
+
+  it('survives a module that also exports a built pool, whose objects are cyclic', () => {
+    const mocks = buildMocks(graphSchema, { seed: 3, count: 4, stableIds: true });
+    const pool = mocks.Product as { category: { products: unknown[] } }[];
+    expect(pool[0]?.category.products).toContain(pool[0]); // the cycle, asserted
+
+    expect(containsMocks({ productPool: pool })).toBe(false);
+    expect(containsMocks({ productPool: pool, ProductMocks: validMock() })).toBe(true);
+  });
+
+  it('answers for a mockOperationsFrom map without building a single entry', () => {
+    let built = 0;
+    const lazy = buildOperationMocks(documents, (document) => {
+      built += 1;
+      return mockOperationVariants(document as never, { users: [] } as never);
+    });
+
+    expect(containsMocks({ operationMocks: lazy })).toBe(true);
+    expect(built).toBe(0);
+
+    // Proof the entries really were reachable — and that reaching them costs what we avoided.
+    expect(validateMocks({ operationMocks: lazy }, { requireData: false })).toEqual([]);
+    expect(built).toBe(2);
+  });
+
+  it('never reads an entry, even one that would throw on access', () => {
+    const exploding = buildOperationMocks(documents, () => {
+      throw new Error('an entry was forced');
+    });
+
+    expect(() => containsMocks({ operationMocks: exploding })).not.toThrow();
+    expect(containsMocks({ operationMocks: exploding })).toBe(true);
+  });
+
+  it('is false for a map whose module held no documents', () => {
+    const empty = buildOperationMocks({ NOPE: 1 }, () => ({}));
+    expect(containsMocks({ operationMocks: empty })).toBe(false);
+  });
+
+  it('is true for a map built from the graph, with nothing resolved', () => {
+    let resolved = 0;
+    const mocks = buildMocks(graphSchema, { seed: 2, count: 2, stableIds: true });
+    const lazy = mocks.mockOperationsFrom(documents as never, {
+      transform: (data) => {
+        resolved += 1;
+        return data;
+      },
+    });
+
+    expect(containsMocks(lazy)).toBe(true);
+    expect(containsMocks({ userMocks: lazy })).toBe(true);
+    expect(resolved).toBe(0);
   });
 });
 
