@@ -1,4 +1,5 @@
 import { type DocumentNode, Kind } from 'graphql';
+import { isOperationMocks } from './operationsFrom.js';
 
 /**
  * Apollo's `MockLink` invokes `result` only when **`result` itself** is a function. A function
@@ -48,6 +49,15 @@ export interface ValidateMocksOptions {
    * default: a resolver is free to require variables this function cannot know.
    */
   probeVariables?: Record<string, unknown>;
+  /**
+   * Treat "no mocks here" as fine and drop the `'empty'` issue, for a caller validating a glob
+   * rather than a known module — a glob picks up fixture-only modules that legitimately hold
+   * none. Leave it off for a module that is supposed to have mocks, where `'empty'` is the only
+   * thing that catches it quietly losing them. Pair it with {@link containsMocks} to assert a
+   * floor, so a glob that matched nothing cannot pass by validating nothing.
+   * @default false
+   */
+  allowEmpty?: boolean;
 }
 
 /** Anything that isn't an array and has an ordinary object prototype. */
@@ -90,42 +100,83 @@ function isVariants(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Flatten whatever was handed in — one mock, an array, a variants trio, or a module namespace
- * full of any of those — into mocks paired with the path they were found at.
+ * What the walk does at the lazy map `mockOperationsFrom` returns.
+ *
+ * - `'force'` — read every entry, building each operation. Validation has no choice: a mock it
+ *   never reads is a mock it never checks.
+ * - `'peek'` — stop at the map and take its key list as the answer. A key exists only for a
+ *   document export, and its value is a variants trio of real mocks, so the key alone proves a
+ *   mock is there without building it.
+ */
+type LazyEntries = 'force' | 'peek';
+
+/**
+ * Walk whatever was handed in — one mock, an array, a variants trio, or a module namespace full
+ * of any of those — calling `found` with each mock and the path it sat at. Returning `true` from
+ * `found` stops the walk and is returned from here, which is what lets {@link containsMocks}
+ * answer on the first hit instead of flattening a whole glob.
  *
  * `seen` is what keeps a module that exports built mock data alongside its mocks from running the
  * stack out: a pooled object is a plain object, so the walk descends into it, and
  * `pool[0].category.products[0].category` comes back round. Visiting each object once stops that
  * without skipping anything a depth cap would skip.
  */
-function collect(
+function walk(
   value: unknown,
   path: string,
-  into: { path: string; mock: unknown }[],
   seen: WeakSet<object>,
-): void {
+  lazy: LazyEntries,
+  found: (path: string, mock: unknown) => boolean,
+): boolean {
   if (typeof value === 'object' && value !== null) {
-    if (seen.has(value)) return; // pooled objects are cyclic by design
+    if (seen.has(value)) return false; // pooled objects are cyclic by design
     seen.add(value);
   }
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => collect(entry, `${path}[${index}]`, into, seen));
-    return;
+    for (const [index, entry] of value.entries()) {
+      if (walk(entry, `${path}[${index}]`, seen, lazy, found)) return true;
+    }
+    return false;
   }
-  if (isMockLike(value)) {
-    into.push({ path, mock: value });
-    return;
+  if (isMockLike(value)) return found(path, value);
+  if (lazy === 'peek' && isOperationMocks(value)) {
+    // Reading the keys builds nothing; reading past them would build every operation in the map.
+    return Object.keys(value).length > 0 ? found(path, value) : false;
   }
   if (isVariants(value)) {
-    for (const key of VARIANT_KEYS) collect(value[key], `${path}.${key}`, into, seen);
-    return;
+    for (const key of VARIANT_KEYS) {
+      if (walk(value[key], `${path}.${key}`, seen, lazy, found)) return true;
+    }
+    return false;
   }
   // A module namespace or a keyed map: recurse, skipping exports that aren't mocks at all.
   if (isPlainObject(value)) {
     for (const [key, entry] of Object.entries(value)) {
-      collect(entry, `${path}.${key}`, into, seen);
+      if (walk(entry, `${path}.${key}`, seen, lazy, found)) return true;
     }
   }
+  return false;
+}
+
+/**
+ * Whether anything handed in holds at least one Apollo mock — the same walk {@link validateMocks}
+ * runs, stopping at the first one, so a caller never has to re-implement it (and guess at how
+ * deep this library nests) to tell a fixture module from a mock module:
+ *
+ * ```ts
+ * const modules = Object.values(import.meta.glob('./mocks/*.ts', { eager: true }));
+ * const withMocks = modules.filter(containsMocks);
+ *
+ * expect(withMocks.length).toBeGreaterThan(10); // a glob that broke asserts nothing, loudly
+ * for (const module of withMocks) assertValidMocks(module);
+ * ```
+ *
+ * **Nothing is built.** Where `validateMocks` forces every entry of a `mockOperationsFrom` map,
+ * this recognises the map and answers from its key list, so asking the question costs nothing
+ * even over a directory of them.
+ */
+export function containsMocks(input: unknown): boolean {
+  return walk(input, 'mocks', new WeakSet(), 'peek', () => true);
 }
 
 /** Walk a resolved `data` payload for function values, guarding against the graph's cycles. */
@@ -215,7 +266,9 @@ function describe(value: unknown): string {
  * the map is optimised for, so keep the check in a test rather than in the module itself.
  *
  * Finding nothing is itself reported, as the single issue `kind: 'empty'` — a module that
- * quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine.
+ * quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine. Over
+ * a glob, where fixture-only modules legitimately hold none, either pass `allowEmpty: true` or
+ * filter with {@link containsMocks} first — the latter also costs nothing on a lazy map.
  *
  * Returns every problem found rather than stopping at the first, so one run fixes a directory.
  * {@link assertValidMocks} is the same check as a throwing assertion.
@@ -223,9 +276,13 @@ function describe(value: unknown): string {
 export function validateMocks(input: unknown, options: ValidateMocksOptions = {}): MockIssue[] {
   const issues: MockIssue[] = [];
   const found: { path: string; mock: unknown }[] = [];
-  collect(input, 'mocks', found, new WeakSet());
+  walk(input, 'mocks', new WeakSet(), 'force', (path, mock) => {
+    found.push({ path, mock });
+    return false; // never stop early: one run should fix a whole directory
+  });
 
   if (found.length === 0) {
+    if (options.allowEmpty) return issues;
     issues.push({ kind: 'empty', path: 'mocks', message: 'no mocks found — nothing was checked' });
     return issues;
   }

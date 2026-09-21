@@ -220,12 +220,20 @@ export interface DeriveContext {
  * derive: { User: { fullName: (self) => `${self.firstName} ${self.lastName}` } }
  * ```
  *
+ * `self` is deliberately **bivariant**. TypeScript checks function parameters
+ * contravariantly, so a derive written against a precise map entry (`self: Order`) is not
+ * assignable to the erased `FieldDeriveFn<Record<string, unknown>>` that an unparameterized
+ * `DeriveConfig` holds — which made a precisely typed, separately declared derive block
+ * impossible to pass anywhere. The library is the only caller and always supplies the instance
+ * the map describes, so the soundness contravariance protects is not at stake here; declaring
+ * the signature in method position is how that is asked for. The cost is that an unrelated but
+ * *wider* `self` annotation is accepted; the return type stays checked either way.
+ *
  * @typeParam TSelf - The owning object's type. @typeParam T - The field's value type.
  */
-export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = (
-  self: TSelf,
-  ctx: DeriveContext,
-) => T;
+export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = {
+  derive(self: TSelf, ctx: DeriveContext): T;
+}['derive'];
 
 // Derives for a single type, degrading to a loose record when the shape is unknown, and
 // treating the map as a hint for the rest, the same way `FieldOverrides` does. The fallback

@@ -67,6 +67,57 @@ const mocks = buildMocks(schema, {
 });
 ```
 
+#### From a faker path: `scalarFromPath`
+
+Where the scalars are a registry rather than a handful of closures, declare them as data — a
+dotted faker path — and let `scalarFromPath` build the mocker:
+
+```ts
+import { buildMocks, scalarFromPath } from '@vantreeseba/graphql-mocks';
+
+const mocks = buildMocks(schema, {
+  scalars: {
+    EmailAddress: scalarFromPath('internet.email'),
+    Slug:         scalarFromPath('lorem.slug', { args: [2] }),
+    UnitSymbol:   scalarFromPath('science.unit', { pick: 'symbol' }),  // returns { name, symbol }
+  },
+});
+```
+
+- **The path is typechecked** against faker's own modules and methods: `'internet.emial'` is a
+  compile error, not a surprise at generation time. So is a `pick` the generator can't produce —
+  `pick` only accepts the keys of an object-returning generator, and nothing at all from one that
+  returns a string or a number.
+- **`args`** are passed to the method as written (`{ args: [2] }` → `faker.lorem.slug(2)`).
+- **The value is whatever faker returns**, not a stringified copy, so `scalarFromPath('number.int')`
+  mocks an `Int` as a number, exactly as the built-in mockers do. `pick` narrows an object result
+  to one property.
+- **An unresolvable path throws a `TypeError` from `scalarFromPath()` itself** — while the options
+  are being built, rather than from inside a half-generated pool. (Every faker instance has the
+  same module layout, so the path can be checked before one is in hand.)
+- The method is invoked **on its module**, which a `get(faker, path)` style lookup can't do:
+  faker's generators read their module off `this` and throw once detached.
+
+`buildScalarsFromPaths` does a whole registry in one call, taking either a map or the list a
+registry usually already is:
+
+```ts
+import { buildScalarsFromPaths } from '@vantreeseba/graphql-mocks';
+
+const mocks = buildMocks(schema, {
+  scalars: buildScalarsFromPaths({
+    EmailAddress: 'internet.email',
+    PhoneNumber:  'phone.number',
+    Slug:         { path: 'lorem.slug', args: [2] },
+  }),
+});
+
+// or: buildScalarsFromPaths([{ name: 'EmailAddress', path: 'internet.email' }, …])
+```
+
+In the batch form `pick` is a plain `string` — a record's paths are only known collectively, so
+`pick` is checked against the generated value at generation time there rather than by the compiler.
+
 ### Field overrides
 
 ```ts
@@ -590,6 +641,24 @@ It reports every problem rather than stopping at the first, so one run fixes a d
 
 Finding *nothing* is reported too, as the single issue `kind: 'empty'` — a module that quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine. Every other issue carries `kind: 'invalid'`, so a fixture module that legitimately holds no mocks can filter the empty report out without matching on message text. The keyed map `mockOperationsFrom` returns is walked like any other module, to the same depth; its entries are lazy, so validating one forces every operation in it. That is what validation is for, but it is the opposite of what the map is optimised for — keep the check in a test rather than in the module itself.
 
+### Over a glob: `containsMocks`
+
+A glob picks up fixture-only modules — chart series, table rows, plain objects a story imports — that legitimately hold no mock, and `'empty'` would turn those red. `containsMocks` answers the question `validateMocks` cannot be asked, so no caller has to re-implement the walk (or guess how deep this library nests) to filter them out:
+
+```ts
+import { assertValidMocks, containsMocks } from '@vantreeseba/graphql-mocks';
+
+const modules = Object.values(import.meta.glob('./mocks/**/*.ts', { eager: true }));
+const withMocks = modules.filter(containsMocks);
+
+expect(withMocks.length).toBeGreaterThan(10); // a glob that broke asserts nothing, loudly
+for (const module of withMocks) assertValidMocks(module);
+```
+
+It is the same walk as `validateMocks`, stopped at the first mock and cycle-safe in the same way — but it **builds nothing**: a `mockOperationsFrom` map is recognised by its brand and answered from its key list, never by reading an entry, so asking costs nothing even over a directory of them. Take the floor assertion seriously: filtering without it is how a glob that matches nothing passes by validating nothing.
+
+`validateMocks(module, { allowEmpty: true })` is the one-call alternative for the same situation — real problems reported, "no mocks here" treated as fine. It still forces a lazy map's entries, because validating them is reading them; `containsMocks` is the cheap one, and the only one that can assert a floor.
+
 ## A transport for any operation
 
 `mocks.toRequestHandler()` answers **any** operation from the graph — no per-operation registration, so one handler covers a whole screen:
@@ -792,6 +861,52 @@ const slow = (parameter: MockClientOption) => ({
 });
 ```
 
+#### The whole family, as a factory
+
+`Default` / `Loading` / `Errored` — plus `NoResults` / `LongNames` for anything rendering a list —
+is the same set in every stories file, and only the component varies. `graphStories()` and
+`graphListStories()` write it:
+
+```ts
+import { graphListStories } from '@vantreeseba/graphql-mocks/apollo';
+
+const stories = graphListStories({ graph: { target: 'Orders', delay: 200 } });
+
+export const Default: Story = stories.Default;
+export const Loading: Story = stories.Loading;
+export const Errored: Story = stories.Errored;
+export const NoResults: Story = stories.NoResults;   // qa: 'emptyLists'
+export const LongNames: Story = stories.LongNames;   // qa: 'longText'
+```
+
+`graph` is the base every member is layered on — the set's fixture, `target`, `delay` and handler
+options — so the whole family keeps it, which re-stating `'loading'` by hand would drop. Each
+member then names exactly one thing: its state, or its QA shape. `parameterName` follows the
+decorator if you renamed the parameter there.
+
+The members are plain `{ parameters: … }` objects, not Storybook types — `Story` comes from your
+own `meta`, and a mocking library has no business depending on a Storybook major. Assignment does
+the checking, as above; a story that also needs `args` spreads: `{ ...stories.Default, args }`.
+
+**`graphListStories` drops the QA members when the base answers with its own rows.** An
+`overrides` entry carrying `data` wins over the graph, so a graph rebuilt with `emptyLists` would
+change nothing and `NoResults` would render the fixture's rows — a story that looks right in
+review and checks nothing. The set comes back without those two instead, in the type as well as at
+runtime, so `stories.NoResults` does not compile:
+
+```ts
+const stories = graphListStories({ graph: { overrides: [ordersFixture] } });
+
+export const NoResults: Story = stories.NoResults;
+//                                      ~~~~~~~~~ Property 'NoResults' does not exist
+```
+
+An entry that only sets `errors`, `delay` or `loading` leaves the graph answering, so those keep
+the QA members. Where the base's type hides the answer (`const base: MockClientParameter = …`, in
+which `data` is merely optional) the type keeps them and the runtime omits them with a warning
+saying why. Overrides configured on the decorator itself are invisible to the factory and mask a
+QA shape the same way.
+
 The same shape works in component tests:
 
 ```tsx
@@ -949,6 +1064,37 @@ Arguments one level inside an input object are found too (`where: { search: "ada
 the matcher's default, with a top-level name beating a nested one. A null or wrongly typed
 argument reads as absent, and with no page size at all the result is unpaged rather than empty.
 It takes the override context, or any `{ args }` object.
+
+#### `totalField`: the total on the row
+
+Not every paginated field has a wrapper to put the total in. A flattened group-by returns a bare
+list, so the total is repeated on every row:
+
+```graphql
+type OrderCountByStatus {
+  status: OrderStatus!
+  count: Int!
+  totalCount: Int!   # the unpaged total, repeated on every row
+}
+```
+
+`totalField` stamps `matchedCount` onto each returned row under that name, so the handler stays
+one call instead of a `.map` afterwards:
+
+```ts
+data: (ctx) => paginateArgs(rows, ctx, { searchFields: ['status'], totalField: 'totalCount' }).items;
+```
+
+`items` is still the return value, so nothing changes for callers that don't pass it. This is the
+row-level counterpart to [`countFields`](#counts-that-agree-with-their-lists) —
+same rule, different place to put the number.
+
+Stamped rows are **shallow copies**: pooled objects are shared with everything that relates to
+them, so writing one page's total into a row would make it the answer everywhere that row is
+reachable from. A value already under that name is overwritten — on this shape it's a
+schema-mocked `Int`, which is exactly the stale number the option exists to replace — and a row
+that isn't an object passes through untouched. When the name is a string literal it lands on the
+element type too, so `row.totalCount` typechecks.
 
 ## QA mode
 
@@ -1461,3 +1607,18 @@ though the field it writes is unmapped. Before this, writing one such field mean
 name no longer errors in these two options — it reads as an unmapped field. Type names still
 catch their own typos, and `MockResult` is unchanged: a pooled instance is typed by the map
 alone, so reading a mock-only field back is an explicit cast.
+
+A `derive` block declared this way is assignable wherever a derive goes, including options
+that carry no map at all — no cast on the way out:
+
+```ts
+const userDerives: NonNullable<DeriveConfig<SchemaTypeMap>['User']> = {
+  fullName: (self) => `${self.firstName} ${self.lastName}`,  // `self` is the mapped `User`
+};
+
+const options: BuildMocksOptions = { derive: { User: userDerives } };
+```
+
+`FieldDeriveFn`'s `self` is bivariant to make that work: the library is the only caller and
+always supplies the instance the map describes, so a precise `self` is not the unsound
+narrowing TypeScript's usual parameter rule assumes. Return types stay checked.
