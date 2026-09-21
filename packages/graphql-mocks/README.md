@@ -783,6 +783,52 @@ const slow = (parameter: MockClientOption) => ({
 });
 ```
 
+#### The whole family, as a factory
+
+`Default` / `Loading` / `Errored` — plus `NoResults` / `LongNames` for anything rendering a list —
+is the same set in every stories file, and only the component varies. `graphStories()` and
+`graphListStories()` write it:
+
+```ts
+import { graphListStories } from '@vantreeseba/graphql-mocks/apollo';
+
+const stories = graphListStories({ graph: { target: 'Orders', delay: 200 } });
+
+export const Default: Story = stories.Default;
+export const Loading: Story = stories.Loading;
+export const Errored: Story = stories.Errored;
+export const NoResults: Story = stories.NoResults;   // qa: 'emptyLists'
+export const LongNames: Story = stories.LongNames;   // qa: 'longText'
+```
+
+`graph` is the base every member is layered on — the set's fixture, `target`, `delay` and handler
+options — so the whole family keeps it, which re-stating `'loading'` by hand would drop. Each
+member then names exactly one thing: its state, or its QA shape. `parameterName` follows the
+decorator if you renamed the parameter there.
+
+The members are plain `{ parameters: … }` objects, not Storybook types — `Story` comes from your
+own `meta`, and a mocking library has no business depending on a Storybook major. Assignment does
+the checking, as above; a story that also needs `args` spreads: `{ ...stories.Default, args }`.
+
+**`graphListStories` drops the QA members when the base answers with its own rows.** An
+`overrides` entry carrying `data` wins over the graph, so a graph rebuilt with `emptyLists` would
+change nothing and `NoResults` would render the fixture's rows — a story that looks right in
+review and checks nothing. The set comes back without those two instead, in the type as well as at
+runtime, so `stories.NoResults` does not compile:
+
+```ts
+const stories = graphListStories({ graph: { overrides: [ordersFixture] } });
+
+export const NoResults: Story = stories.NoResults;
+//                                      ~~~~~~~~~ Property 'NoResults' does not exist
+```
+
+An entry that only sets `errors`, `delay` or `loading` leaves the graph answering, so those keep
+the QA members. Where the base's type hides the answer (`const base: MockClientParameter = …`, in
+which `data` is merely optional) the type keeps them and the runtime omits them with a warning
+saying why. Overrides configured on the decorator itself are invisible to the factory and mask a
+QA shape the same way.
+
 The same shape works in component tests:
 
 ```tsx
