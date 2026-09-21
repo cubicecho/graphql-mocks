@@ -1439,3 +1439,18 @@ though the field it writes is unmapped. Before this, writing one such field mean
 name no longer errors in these two options — it reads as an unmapped field. Type names still
 catch their own typos, and `MockResult` is unchanged: a pooled instance is typed by the map
 alone, so reading a mock-only field back is an explicit cast.
+
+A `derive` block declared this way is assignable wherever a derive goes, including options
+that carry no map at all — no cast on the way out:
+
+```ts
+const userDerives: NonNullable<DeriveConfig<SchemaTypeMap>['User']> = {
+  fullName: (self) => `${self.firstName} ${self.lastName}`,  // `self` is the mapped `User`
+};
+
+const options: BuildMocksOptions = { derive: { User: userDerives } };
+```
+
+`FieldDeriveFn`'s `self` is bivariant to make that work: the library is the only caller and
+always supplies the instance the map describes, so a precise `self` is not the unsound
+narrowing TypeScript's usual parameter rule assumes. Return types stay checked.
