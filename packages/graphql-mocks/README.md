@@ -67,6 +67,57 @@ const mocks = buildMocks(schema, {
 });
 ```
 
+#### From a faker path: `scalarFromPath`
+
+Where the scalars are a registry rather than a handful of closures, declare them as data — a
+dotted faker path — and let `scalarFromPath` build the mocker:
+
+```ts
+import { buildMocks, scalarFromPath } from '@vantreeseba/graphql-mocks';
+
+const mocks = buildMocks(schema, {
+  scalars: {
+    EmailAddress: scalarFromPath('internet.email'),
+    Slug:         scalarFromPath('lorem.slug', { args: [2] }),
+    UnitSymbol:   scalarFromPath('science.unit', { pick: 'symbol' }),  // returns { name, symbol }
+  },
+});
+```
+
+- **The path is typechecked** against faker's own modules and methods: `'internet.emial'` is a
+  compile error, not a surprise at generation time. So is a `pick` the generator can't produce —
+  `pick` only accepts the keys of an object-returning generator, and nothing at all from one that
+  returns a string or a number.
+- **`args`** are passed to the method as written (`{ args: [2] }` → `faker.lorem.slug(2)`).
+- **The value is whatever faker returns**, not a stringified copy, so `scalarFromPath('number.int')`
+  mocks an `Int` as a number, exactly as the built-in mockers do. `pick` narrows an object result
+  to one property.
+- **An unresolvable path throws a `TypeError` from `scalarFromPath()` itself** — while the options
+  are being built, rather than from inside a half-generated pool. (Every faker instance has the
+  same module layout, so the path can be checked before one is in hand.)
+- The method is invoked **on its module**, which a `get(faker, path)` style lookup can't do:
+  faker's generators read their module off `this` and throw once detached.
+
+`buildScalarsFromPaths` does a whole registry in one call, taking either a map or the list a
+registry usually already is:
+
+```ts
+import { buildScalarsFromPaths } from '@vantreeseba/graphql-mocks';
+
+const mocks = buildMocks(schema, {
+  scalars: buildScalarsFromPaths({
+    EmailAddress: 'internet.email',
+    PhoneNumber:  'phone.number',
+    Slug:         { path: 'lorem.slug', args: [2] },
+  }),
+});
+
+// or: buildScalarsFromPaths([{ name: 'EmailAddress', path: 'internet.email' }, …])
+```
+
+In the batch form `pick` is a plain `string` — a record's paths are only known collectively, so
+`pick` is checked against the generated value at generation time there rather than by the compiler.
+
 ### Field overrides
 
 ```ts
