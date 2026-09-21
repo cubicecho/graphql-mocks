@@ -18,7 +18,13 @@ export {
   paginateArgs,
   searchItems,
 } from './collection.js';
-export type { PageArgs, PaginateArgsOptions, PaginatedArgs, SearchField } from './collection.js';
+export type {
+  PageArgs,
+  PaginateArgsOptions,
+  PaginatedArgs,
+  SearchField,
+  WithTotalField,
+} from './collection.js';
 export type { ArgMatchingOptions, ArgMissBehavior } from './argMatching.js';
 export type {
   AliasesConfig,
