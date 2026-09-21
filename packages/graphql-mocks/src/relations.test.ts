@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildMocks } from './mockSchema.js';
 import { UNBOUNDED, relationBounds, resolveRelation } from './relations.js';
 import { schema } from './test/schema.js';
-import type { RelationContext, RelationSpec, RelationsConfig } from './types.js';
+import type {
+  BuildMocksOptions,
+  RelationContext,
+  RelationPredicate,
+  RelationSpec,
+  RelationsConfig,
+} from './types.js';
 
 const fn: RelationSpec = ({ pool }) => pool[0];
 
@@ -622,5 +628,58 @@ describe('a where predicate', () => {
         }[]
       ).map((post) => post.comments.map((c) => c.id));
     expect(ids()).toEqual(ids());
+  });
+});
+
+describe('a typed where predicate', () => {
+  type TestUser = { id: string; isActive: boolean };
+  type TestPost = { id: string; author: TestUser; comments: { id: string; body: string }[] };
+  type TestTypes = { User: TestUser; Post: TestPost };
+
+  it('types the candidate from the related field, with no cast', () => {
+    const options: BuildMocksOptions<TestTypes> = {
+      relations: {
+        // `author` is a `TestUser`, `comments` is a list of comments — both inferred from the
+        // map, so neither predicate needs an annotation or the `as` it used to start with.
+        Post: {
+          author: { where: (user) => user.isActive },
+          comments: { size: 2, where: (comment) => comment.body.length > 0 },
+        },
+      },
+    };
+
+    expect(options.relations).toBeDefined();
+  });
+
+  it('checks the candidate fields, which is where a typo is a typo', () => {
+    const options: BuildMocksOptions<TestTypes> = {
+      relations: {
+        // @ts-expect-error — `isActve` is not a field of the related `User`.
+        Post: { author: { where: (user) => user.isActve } },
+      },
+    };
+
+    expect(options.relations).toBeDefined();
+  });
+
+  it('names the candidate type on a predicate declared away from the config', () => {
+    const isActive: RelationPredicate<TestUser> = (user) => user.isActive;
+    const options: BuildMocksOptions<TestTypes> = {
+      relations: { Post: { author: { where: isActive } } },
+    };
+
+    expect(options.relations).toBeDefined();
+  });
+
+  it('leaves an unparameterized predicate exactly as it was', () => {
+    // The pre-existing form: no type argument, so the candidate is the loose pooled record and
+    // an untyped `relations` map still takes it.
+    const notFirst: RelationPredicate = (item) => item.id !== 'Comment-0';
+    const relations: RelationsConfig = { Post: { comments: { where: notFirst } } };
+    const mocks = buildMocks(schema, { seed: 5, count: 6, stableIds: true, relations });
+
+    for (const post of mocks.Post as { comments: { id: string }[] }[]) {
+      expect(post.comments.map((comment) => comment.id)).not.toContain('Comment-0');
+    }
   });
 });

@@ -128,8 +128,12 @@ function toFormattedErrors(
   return list.map((entry) => (typeof entry === 'string' ? { message: entry } : entry));
 }
 
-/** Stable stringify so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` produce the same memo key. */
-function stableKey(value: unknown): string {
+/**
+ * Stable stringify so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` produce the same memo key. Shared
+ * with the graph's own `resolveOnce` memo rather than written twice — two memo keys that
+ * disagree about ordering would be two different caching behaviours for the same input.
+ */
+export function stableKey(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
   if (Array.isArray(value)) return `[${value.map(stableKey).join(',')}]`;
   const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>

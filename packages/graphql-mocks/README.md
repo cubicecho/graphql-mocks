@@ -269,6 +269,15 @@ const data = mocks.dataForOperation(UserByIdQuery);
 
 It is **not idempotent**: each call re-resolves against the pool and draws from the shared seeded faker, so two identical calls return different rows — and, for a root list, a different number of them. It reads like a pure accessor and isn't one. To read the rows a *mock* will hand Apollo, build the mock and unwrap it with [`dataOf`](#reading-a-mock-back).
 
+When you want *the* rows a document stands for — an id or a name to read out of, or to assert against — use `resolveOnce`, which is the same call memoized on the graph:
+
+```ts
+const { user } = mocks.resolveOnce(UserByIdQuery); // resolved once
+mocks.resolveOnce(UserByIdQuery);                  // the same object, not a fresh draw
+```
+
+The memo is keyed by document **identity** (a re-`parse` of the same source is a different document) and by the `variables` and `matchArguments` passed with it, so two different questions still get two different answers. It replaces the hand-rolled `Map<DocumentNode, …>` — and the risk of two reads quietly disagreeing.
+
 ## Apollo `MockedProvider`
 
 These helpers turn a `TypedDocumentNode` into an entry for Apollo's `MockedProvider` `mocks` array — no hand-written `request`/`result` boilerplate.
@@ -800,10 +809,19 @@ function renderWithMocks(ui: React.ReactElement, options: MockHandlerOptions = {
 ## Addressing pooled data
 
 ```ts
-mocks.ids('User');            // ['User-0', 'User-1', …] in generation order
-mocks.at('User', 0);          // the first pooled User
-mocks.byId('User', 'User-2'); // looked up by id, compared as strings
+mocks.ids('User');                  // ['User-0', 'User-1', …] in generation order
+mocks.at('User', 0);                // the first pooled User
+mocks.byId('User', 'User-2');       // looked up by id, compared as strings
+mocks.byIdOrIndex('User', someKey); // an id, else an index, else element 0 — never undefined
 ```
+
+`byIdOrIndex` is the "either" lookup: a key that might be a real pooled id, might be a numeric index, and might be missing. It tries the id first, then the key as an index when it reads as a whole one in range, then falls back to element 0 — and because it always returns an element, the return type is **not** optional:
+
+```ts
+const user = mocks.byIdOrIndex('User', routeParam); // TTypes['User'], no `??` chain, no cast
+```
+
+That is the difference from writing `byId(…) ?? at(…, Number(key) || 0) ?? at(…, 0)` by hand: the chain widens to include `undefined` even though its last arm cannot be, so the call site ends up asserting what the library already knows. An **empty pool throws** a `RangeError` — with no element 0 there is nothing to fall back to, and a non-optional return would be a lie. Use `at`/`byId` where "no such item" is a legitimate answer.
 
 `ids` needs no `TTypes` map to come back typed, which `at('User', 0)?.id` does under `noUncheckedIndexedAccess`:
 
@@ -1100,7 +1118,11 @@ const mocks = buildMocks(schema, {
 ```
 
 `where` is called as `(item, ctx)` with the same `ctx` a relation function gets, and anything
-truthy keeps the object. `size` is an ordinary spec — a number, a range, `'all'` or `null` — and
+truthy keeps the object. With a [`TTypes` map](#typed-pools) the candidate is typed from the
+related field itself — `Post.author` hands the predicate a `User`, `Post.comments` a `Comment` —
+so neither predicate above needs an annotation or a cast. A predicate declared away from the
+config names it once, as `RelationPredicate<User>`; with no type argument the candidate stays the
+loose pooled record it has always been. `size` is an ordinary spec — a number, a range, `'all'` or `null` — and
 when it's absent the field is sized exactly as it would have been with no entry at all. Pools
 still grow to meet a `size`, since the filtered draw comes out of the same pool.
 
