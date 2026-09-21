@@ -1,0 +1,137 @@
+---
+layout: base.njk
+---
+<section class="hero project-hero">
+  <h1>{{ site.name }}</h1>
+  <p>{{ site.tagline }}</p>
+  <p class="meta">
+    <span><code>@vantreeseba/graphql-mocks</code></span>
+    <span>TypeScript, ESM only</span>
+    <span>graphql ≥ 16 · faker ≥ 9</span>
+    <span>MIT</span>
+  </p>
+  <p class="cta">
+    <a class="button" href="#start">Get started</a>
+    <a class="button secondary" href="{{ site.repo }}" rel="noopener">GitHub ↗</a>
+  </p>
+</section>
+
+<section class="section">
+  <h2>What it does</h2>
+  <p class="section-intro">
+    You hand it a <code>GraphQLSchema</code> — or a string of SDL — and it hands
+    back a pool of mock objects per type, with relationship fields wired as real
+    object references. <code>todo.user</code> is the same object as
+    <code>mocks.User[i]</code>, not a copy of it and not a fresh random user.
+    Because the data is a graph rather than a pile of unrelated fixtures, an
+    arbitrary query can be answered from it: you write the query your component
+    already writes, and the selection set decides what comes back.
+  </p>
+
+  <ul class="card-grid">
+    <li>
+      <article class="card">
+        <h3>A graph, not fixtures</h3>
+        <p>
+          Relationships are honoured in both directions and cycles resolve to
+          objects that already exist, so back-references point home instead of
+          generating forever. Sizes are yours: <code>count</code> per type,
+          <code>relations</code> per field, <code>listSize</code> for lists of
+          scalars.
+        </p>
+      </article>
+    </li>
+    <li>
+      <article class="card">
+        <h3>Answers any operation</h3>
+        <p>
+          <code>dataForOperation(doc)</code> runs a document against the graph
+          and returns data shaped to its selection set — fragments, unions and
+          interfaces included. <code>toRequestHandler()</code> turns the pool
+          into one callable that answers every operation, memoizes per document
+          and records the calls it saw.
+        </p>
+      </article>
+    </li>
+    <li>
+      <article class="card">
+        <h3>Reproducible, or deliberately awful</h3>
+        <p>
+          A <code>seed</code> makes the whole build reproducible, down to the
+          draws your own overrides make, so a snapshot test is not a coin flip.
+          QA presets swap in the data that actually breaks layouts — long text,
+          unicode, empty lists, mixed nulls — and scenarios name a combination
+          so you can pass it around.
+        </p>
+      </article>
+    </li>
+    <li>
+      <article class="card">
+        <h3>Apollo and Storybook</h3>
+        <p>
+          <code>createMockClient</code> and <code>mockLink</code> put the graph
+          behind a real Apollo client; <code>mockOperation</code> builds
+          <code>MockedProvider</code> mocks that resolve from it. The
+          <code>withGraphqlMocks</code> decorator gives every story a client and
+          a parameter for picking loading, error or QA states.
+        </p>
+      </article>
+    </li>
+  </ul>
+</section>
+
+<section class="section" id="start">
+  <h2>Get started</h2>
+  <div class="prose">
+    <pre class="code"><code>npm install --save-dev @vantreeseba/graphql-mocks graphql @faker-js/faker</code></pre>
+    <pre class="code"><code>import { buildMocks } from '@vantreeseba/graphql-mocks';
+
+const mocks = buildMocks(schema, { seed: 42, count: 10, stableIds: true });
+
+mocks.User;                            // 10 User objects — and mocks.Todo[0].user is
+                                       // one of them: the same object, not a copy
+mocks.byId('User', 'User-2');          // readable ids, thanks to stableIds
+mocks.dataForOperation(UserByIdQuery); // answered from the graph, shaped to the
+                                       // selection set</code></pre>
+    <p>
+      That is the whole first step. From there:
+      <code>buildMocks(schema, { qa: 'longText' })</code> for the data that
+      breaks things, <code>mocks.toRequestHandler()</code> for a transport that
+      answers every operation, and the companion codegen plugin
+      <code>@vantreeseba/graphql-mocks-codegen</code> for pools that come back
+      typed without a cast.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Documentation</h2>
+  <div class="prose">
+    <ul>
+      <li>
+        <a href="{{ site.repo }}/blob/main/docs/getting-started.md" rel="noopener">How to use this library</a>
+        — the guided path: install, first pool, rendering a component against
+        it, typing the pools, shaping the data, and the handful of things that
+        surprise people.
+      </li>
+      <li>
+        <a href="{{ site.repo }}/blob/main/packages/graphql-mocks/README.md" rel="noopener">Runtime reference</a>
+        — every option and export: argument matching, the request handler, QA
+        mode, scenarios, the Apollo integration, typed pools.
+      </li>
+      <li>
+        <a href="{{ site.repo }}/blob/main/packages/graphql-mocks-codegen/README.md" rel="noopener">Codegen plugin</a>
+        — generating a <code>SchemaTypeMap</code> so pools come back typed.
+      </li>
+      <li>
+        <a href="{{ site.repo }}/blob/main/CONTRIBUTING.md" rel="noopener">Contributing</a>
+        — working on the repo itself.
+      </li>
+    </ul>
+  </div>
+
+  <p class="readme-link">
+    Full documentation lives in the project README:
+    <a href="{{ site.repo }}#readme" rel="noopener">{{ site.repo }}</a>
+  </p>
+</section>

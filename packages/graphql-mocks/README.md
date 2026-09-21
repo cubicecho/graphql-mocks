@@ -581,6 +581,24 @@ It reports every problem rather than stopping at the first, so one run fixes a d
 
 Finding *nothing* is reported too, as the single issue `kind: 'empty'` — a module that quietly stops exporting mocks otherwise looks exactly like one whose mocks are all fine. Every other issue carries `kind: 'invalid'`, so a fixture module that legitimately holds no mocks can filter the empty report out without matching on message text. The keyed map `mockOperationsFrom` returns is walked like any other module, to the same depth; its entries are lazy, so validating one forces every operation in it. That is what validation is for, but it is the opposite of what the map is optimised for — keep the check in a test rather than in the module itself.
 
+### Over a glob: `containsMocks`
+
+A glob picks up fixture-only modules — chart series, table rows, plain objects a story imports — that legitimately hold no mock, and `'empty'` would turn those red. `containsMocks` answers the question `validateMocks` cannot be asked, so no caller has to re-implement the walk (or guess how deep this library nests) to filter them out:
+
+```ts
+import { assertValidMocks, containsMocks } from '@vantreeseba/graphql-mocks';
+
+const modules = Object.values(import.meta.glob('./mocks/**/*.ts', { eager: true }));
+const withMocks = modules.filter(containsMocks);
+
+expect(withMocks.length).toBeGreaterThan(10); // a glob that broke asserts nothing, loudly
+for (const module of withMocks) assertValidMocks(module);
+```
+
+It is the same walk as `validateMocks`, stopped at the first mock and cycle-safe in the same way — but it **builds nothing**: a `mockOperationsFrom` map is recognised by its brand and answered from its key list, never by reading an entry, so asking costs nothing even over a directory of them. Take the floor assertion seriously: filtering without it is how a glob that matches nothing passes by validating nothing.
+
+`validateMocks(module, { allowEmpty: true })` is the one-call alternative for the same situation — real problems reported, "no mocks here" treated as fine. It still forces a lazy map's entries, because validating them is reading them; `containsMocks` is the cheap one, and the only one that can assert a floor.
+
 ## A transport for any operation
 
 `mocks.toRequestHandler()` answers **any** operation from the graph — no per-operation registration, so one handler covers a whole screen:
@@ -931,6 +949,37 @@ Arguments one level inside an input object are found too (`where: { search: "ada
 the matcher's default, with a top-level name beating a nested one. A null or wrongly typed
 argument reads as absent, and with no page size at all the result is unpaged rather than empty.
 It takes the override context, or any `{ args }` object.
+
+#### `totalField`: the total on the row
+
+Not every paginated field has a wrapper to put the total in. A flattened group-by returns a bare
+list, so the total is repeated on every row:
+
+```graphql
+type OrderCountByStatus {
+  status: OrderStatus!
+  count: Int!
+  totalCount: Int!   # the unpaged total, repeated on every row
+}
+```
+
+`totalField` stamps `matchedCount` onto each returned row under that name, so the handler stays
+one call instead of a `.map` afterwards:
+
+```ts
+data: (ctx) => paginateArgs(rows, ctx, { searchFields: ['status'], totalField: 'totalCount' }).items;
+```
+
+`items` is still the return value, so nothing changes for callers that don't pass it. This is the
+row-level counterpart to [`countFields`](#counts-that-agree-with-their-lists) —
+same rule, different place to put the number.
+
+Stamped rows are **shallow copies**: pooled objects are shared with everything that relates to
+them, so writing one page's total into a row would make it the answer everywhere that row is
+reachable from. A value already under that name is overwritten — on this shape it's a
+schema-mocked `Int`, which is exactly the stale number the option exists to replace — and a row
+that isn't an object passes through untouched. When the name is a string literal it lands on the
+element type too, so `row.totalCount` typechecks.
 
 ## QA mode
 
