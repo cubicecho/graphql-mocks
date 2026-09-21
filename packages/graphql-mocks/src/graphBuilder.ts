@@ -45,6 +45,7 @@ import {
   type MockHandlerOptions,
   type MockRequestHandler,
   createRequestHandler,
+  stableKey,
 } from './requestHandler.js';
 import {
   type ResolvedOptions,
@@ -227,6 +228,37 @@ function createMockResult(
     );
 
   /**
+   * `resolveOnce`'s memo, keyed by document identity and then by the variables it was asked
+   * with. Identity rather than the printed document because the caller holds the very object
+   * (a codegen `TypedDocumentNode`), and printing every lookup would cost more than the
+   * re-resolve it saves; nested rather than one composite key so the document itself never has
+   * to be stringified.
+   */
+  const resolveOnceMemo = new Map<
+    Parameters<typeof resolveOperationData>[3],
+    Map<string, unknown>
+  >();
+
+  const resolveOnce = (
+    document: Parameters<typeof resolveOperationData>[3],
+    variables?: Record<string, unknown>,
+    matchArguments?: Parameters<typeof resolveOperationData>[5],
+  ) => {
+    let byVariables = resolveOnceMemo.get(document);
+    if (byVariables === undefined) {
+      byVariables = new Map<string, unknown>();
+      resolveOnceMemo.set(document, byVariables);
+    }
+    const key = `${stableKey(variables)}|${stableKey(matchArguments)}`;
+    // `has`, not a truthiness check: a document whose data resolves to null or undefined is
+    // still resolved, and re-resolving it would be the non-idempotence this helper removes.
+    if (byVariables.has(key)) return byVariables.get(key);
+    const data = dataForOperation(document, variables, matchArguments);
+    byVariables.set(key, data);
+    return data;
+  };
+
+  /**
    * Data source for the graph-bound builders: a value resolved once by default, or a resolver
    * called per request when `dynamic` is set, so real incoming variables reach the argument
    * engine even when `request.variables` is a match-any predicate. `transform` applies to
@@ -262,6 +294,28 @@ function createMockResult(
         (item) => item != null && String(item.id) === wanted,
       ) as T | undefined;
     },
+    byIdOrIndex<T = unknown>(typeName: string, key: string | number | null | undefined): T {
+      const items = pool[typeName] as T[] | undefined;
+      const first = items?.[0];
+      if (items === undefined || first === undefined) {
+        throw new RangeError(
+          `[graphql-mocks] byIdOrIndex: no pooled "${typeName}" to fall back to — the helper always returns an item, so an empty pool has no answer to give (use byId/at where "none" is legitimate)`,
+        );
+      }
+      if (key === null || key === undefined || key === '') return first;
+
+      const wanted = String(key);
+      const match = (items as { id?: unknown }[]).find(
+        (item) => item != null && String(item.id) === wanted,
+      );
+      if (match !== undefined) return match as T;
+
+      // Only a whole, in-range number reads as an index; anything else is an id that missed,
+      // and falling through to element 0 is the documented answer for that.
+      const index = Number(wanted);
+      const byIndex = Number.isInteger(index) && index >= 0 ? items[index] : undefined;
+      return byIndex ?? first;
+    },
     ids(typeName: string): string[] {
       const items = pool[typeName] as { id?: unknown }[] | undefined;
       if (!items) return [];
@@ -272,6 +326,7 @@ function createMockResult(
       return result;
     },
     dataForOperation,
+    resolveOnce,
     mockOperation(
       document: Parameters<typeof buildMockOperation>[0],
       opOptions: MockOperationOptions = {},

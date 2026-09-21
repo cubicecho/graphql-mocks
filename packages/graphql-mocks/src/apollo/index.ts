@@ -257,6 +257,16 @@ export type MockClientOption = boolean | MockClientState | MockClientParameter;
 
 export { toMockClientParameter, withQa, withState } from './parameter.js';
 
+export { graphListStories, graphStories } from './stories.js';
+
+export type {
+  GraphListStoriesResult,
+  GraphListStorySet,
+  GraphStoriesOptions,
+  GraphStory,
+  GraphStorySet,
+} from './stories.js';
+
 function graphFor(source: MockClientSource, parameter: MockClientParameter): MockClientSource {
   const wantsBuild = parameter.build !== undefined || parameter.qa !== undefined;
   if (!isFactory(source)) {

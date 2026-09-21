@@ -220,12 +220,20 @@ export interface DeriveContext {
  * derive: { User: { fullName: (self) => `${self.firstName} ${self.lastName}` } }
  * ```
  *
+ * `self` is deliberately **bivariant**. TypeScript checks function parameters
+ * contravariantly, so a derive written against a precise map entry (`self: Order`) is not
+ * assignable to the erased `FieldDeriveFn<Record<string, unknown>>` that an unparameterized
+ * `DeriveConfig` holds — which made a precisely typed, separately declared derive block
+ * impossible to pass anywhere. The library is the only caller and always supplies the instance
+ * the map describes, so the soundness contravariance protects is not at stake here; declaring
+ * the signature in method position is how that is asked for. The cost is that an unrelated but
+ * *wider* `self` annotation is accepted; the return type stays checked either way.
+ *
  * @typeParam TSelf - The owning object's type. @typeParam T - The field's value type.
  */
-export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = (
-  self: TSelf,
-  ctx: DeriveContext,
-) => T;
+export type FieldDeriveFn<TSelf = Record<string, unknown>, T = unknown> = {
+  derive(self: TSelf, ctx: DeriveContext): T;
+}['derive'];
 
 // Derives for a single type, degrading to a loose record when the shape is unknown, and
 // treating the map as a hint for the rest, the same way `FieldOverrides` does. The fallback
@@ -354,10 +362,15 @@ export type RelationFn = (ctx: RelationContext) => unknown;
 /**
  * Which pooled objects a relationship field may draw from. Returns a truthy value to keep one.
  *
- * The item is a pooled instance, typed loosely because `relations` keys fields by name and
- * carries no per-field element type — narrow it yourself where the schema types are to hand.
+ * `T` is the pooled element the field draws from. It defaults to the loose record shape, and is
+ * filled in from the related field's own type wherever `relations` is written against a `TTypes`
+ * map — so a predicate inside the config needs neither an annotation nor a cast. Name it
+ * (`RelationPredicate<User>`) when the predicate is declared away from the config it feeds.
  */
-export type RelationPredicate = (item: Record<string, unknown>, ctx: RelationContext) => unknown;
+export type RelationPredicate<T = Record<string, unknown>> = (
+  item: T,
+  ctx: RelationContext,
+) => unknown;
 
 /**
  * Draw the related objects from only the pooled ones a predicate keeps — the shape that
@@ -374,22 +387,32 @@ export type RelationPredicate = (item: Record<string, unknown>, ctx: RelationCon
  * cannot satisfy, and left alone it surfaces much later as an unexplained null. Where "none"
  * is a legitimate answer, say so with a {@link RelationFn}.
  */
-export interface RelationFilter {
+export interface RelationFilter<T = Record<string, unknown>> {
   /** How many to draw from the candidates. Sized like any other relation when omitted. */
   size?: RelationSize;
   /** Keeps the pooled objects this field may draw from. */
-  where: RelationPredicate;
+  where: RelationPredicate<T>;
 }
 
 /** A size, a filtered draw, or a function that computes the field value outright. */
-export type RelationSpec = RelationSize | RelationFilter | RelationFn;
+export type RelationSpec<T = Record<string, unknown>> =
+  | RelationSize
+  | RelationFilter<T>
+  | RelationFn;
+
+/**
+ * The pooled element a relationship field draws from: a list field's item type, or the field's
+ * own. Nullability is stripped because a `where` predicate only ever sees pooled objects — the
+ * null a nullable field may end up holding is decided after the filter has run.
+ */
+type RelatedItem<F> = NonNullable<F> extends readonly (infer E)[] ? NonNullable<E> : NonNullable<F>;
 
 // Relationship specs for one type, keyed by field name, with a `_default` for that type's
 // other relationship fields. Degrades to a loose record when the type's shape is unknown,
 // mirroring `FieldOverrides`.
 type TypeRelations<T> = unknown extends T
   ? { _default?: RelationSpec } & Record<string, RelationSpec>
-  : { _default?: RelationSpec } & { [F in keyof T]?: RelationSpec };
+  : { _default?: RelationSpec } & { [F in keyof T]?: RelationSpec<RelatedItem<T[F]>> };
 
 /** The untyped `relations` map: any type name, any field name. */
 export interface LooseRelationsMap {
@@ -943,6 +966,28 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
   byId<K extends keyof TTypes & string>(typeName: K, id: string | number): TTypes[K] | undefined;
   byId<T = unknown>(typeName: string, id: string | number): T | undefined;
   /**
+   * The pooled item for a key that might be an id, might be a numeric index, and might be
+   * missing — the "either" lookup a builder taking a route parameter keeps writing by hand:
+   *
+   * ```ts
+   * const user = mocks.byIdOrIndex('User', routeParam); // TTypes['User'], never undefined
+   * ```
+   *
+   * Resolved in that order: the item with that id, else the item at that index when the key
+   * reads as one in range, else element 0. The return is **not** optional, which is the point —
+   * the `byId(…) ?? at(…) ?? at(…, 0)` chain it replaces widens to `undefined` even though its
+   * last arm cannot be, and so forces a cast at every call site.
+   *
+   * **Throws** a `RangeError` when the pool is empty, since there is then no element 0 to fall
+   * back to and a non-optional return would be a lie. Reach for `byId`/`at` where "no such
+   * item" is a legitimate answer.
+   */
+  byIdOrIndex<K extends keyof TTypes & string>(
+    typeName: K,
+    key: string | number | null | undefined,
+  ): TTypes[K];
+  byIdOrIndex<T = unknown>(typeName: string, key: string | number | null | undefined): T;
+  /**
    * The ids of every pooled item of `typeName`, in generation order; items without an id are
    * skipped. Unlike `at(...)?.id`, this needs no `TTypes` map to come back typed:
    *
@@ -971,6 +1016,27 @@ export interface MockHelpers<TTypes extends Record<string, unknown> = Record<str
    * hand Apollo, build the mock and read it back with `dataOf`.
    */
   dataForOperation<TData = unknown, TVars = Record<string, unknown>>(
+    document: TypedDocumentNode<TData, TVars> | DocumentNode,
+    variables?: TVars extends Record<string, unknown> ? Partial<TVars> : Record<string, unknown>,
+    matchArguments?: boolean | ArgMatchingOptions,
+  ): TData;
+  /**
+   * {@link MockHelpers.dataForOperation}, resolved once and remembered: the first call executes,
+   * every later call with the same document object and the same variables hands back that same
+   * result. For a module that wants *the* rows a document stands for — an id or a name to read
+   * out of, or to assert against — rather than a fresh draw:
+   *
+   * ```ts
+   * const { user } = mocks.resolveOnce(UserByIdQuery);
+   * expect(screen.getByText(user.name)).toBeInTheDocument();
+   * ```
+   *
+   * The memo lives on this `MockResult`, keyed by document **identity** (so a re-`parse` of the
+   * same source is a different document) and by the variables and `matchArguments` given with
+   * it. It replaces the hand-rolled `Map<DocumentNode, unknown>` the non-idempotent form
+   * otherwise forces, and with it the risk of two reads quietly disagreeing.
+   */
+  resolveOnce<TData = unknown, TVars = Record<string, unknown>>(
     document: TypedDocumentNode<TData, TVars> | DocumentNode,
     variables?: TVars extends Record<string, unknown> ? Partial<TVars> : Record<string, unknown>,
     matchArguments?: boolean | ArgMatchingOptions,

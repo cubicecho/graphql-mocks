@@ -1,7 +1,9 @@
 import { faker } from '@faker-js/faker';
-import { buildSchema } from 'graphql';
+import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
+import { buildSchema, parse } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 import { buildGraph } from './graphBuilder.js';
+import { buildMocks } from './mockSchema.js';
 import { schema } from './test/schema.js';
 
 describe('buildGraph', () => {
@@ -368,5 +370,111 @@ describe('pool accessors', () => {
       item.id = undefined;
     }
     expect(noIds.ids('Comment')).toEqual([]);
+  });
+});
+
+describe('byIdOrIndex', () => {
+  const mocks = buildGraph(schema, { seed: 21, count: 4, stableIds: true });
+  const id = (key: string | number | null | undefined) =>
+    mocks.byIdOrIndex<{ id: string }>('User', key).id;
+
+  it('prefers a real id, compared as strings', () => {
+    expect(id('User-2')).toBe('User-2');
+    const numeric = buildGraph(schema, {
+      seed: 21,
+      count: 3,
+      overrides: { User: { id: () => 7 } },
+    });
+    expect(numeric.byIdOrIndex<{ id: number }>('User', 7).id).toBe(7);
+  });
+
+  it('reads a key no id matched as an index', () => {
+    expect(id(3)).toBe('User-3');
+    expect(id('1')).toBe('User-1');
+  });
+
+  it('falls back to element 0 for a key that is neither', () => {
+    expect(id('missing')).toBe('User-0');
+    expect(id(99)).toBe('User-0');
+    expect(id(-1)).toBe('User-0');
+    expect(id(1.5)).toBe('User-0');
+    expect(id(undefined)).toBe('User-0');
+    expect(id(null)).toBe('User-0');
+    expect(id('')).toBe('User-0');
+  });
+
+  it('prefers the id even when the key also reads as an index', () => {
+    // A pool whose ids are the numbers 0..n: the id lookup has to win, or an id of "2" would
+    // silently answer with the third row instead of the row that carries it.
+    const numeric = buildGraph(schema, {
+      seed: 21,
+      count: 4,
+      overrides: { User: { id: (_f, { index }) => String(3 - index) } },
+    });
+    expect(numeric.byIdOrIndex<{ id: string }>('User', '3').id).toBe('3');
+  });
+
+  it('throws when there is no element 0 to fall back to', () => {
+    const empty = buildGraph(schema, { seed: 1, count: { _default: 2, Comment: 0 } });
+    expect(() => empty.byIdOrIndex('Comment', 'Comment-0')).toThrow(RangeError);
+    expect(() => empty.byIdOrIndex('Comment', 0)).toThrow(/no pooled "Comment" to fall back to/);
+    expect(() => empty.byIdOrIndex('Nope', 0)).toThrow(/no pooled "Nope" to fall back to/);
+  });
+
+  it('returns the element non-optionally, with no cast at the call site', () => {
+    type TestTypes = { User: { id: string; name: string } };
+    const typed = buildMocks<TestTypes>(schema, { seed: 21, count: 4, stableIds: true });
+
+    // The whole point: a non-optional element, so neither the `??` chain nor the assertion the
+    // chain forced is written here.
+    const user: TestTypes['User'] = typed.byIdOrIndex('User', '2');
+    expect(user.id).toBe('User-2');
+
+    // @ts-expect-error — `byId` is the optional form, which is the widening this removes.
+    const viaById: TestTypes['User'] = typed.byId('User', 'missing');
+    expect(viaById).toBeUndefined();
+  });
+});
+
+describe('resolveOnce', () => {
+  type Data = { users: { id: string; name: string }[] };
+  const source = '{ users { id name } }';
+
+  it('resolves once and hands back the same rows after that', () => {
+    const mocks = buildGraph(schema, { seed: 3, count: 6 });
+    const document = parse(source);
+
+    const first = mocks.resolveOnce<Data>(document);
+    expect(mocks.resolveOnce<Data>(document)).toBe(first);
+    // The contrast the helper exists for: the unmemoized form re-draws every call.
+    expect(mocks.dataForOperation<Data>(document)).not.toEqual(first);
+  });
+
+  it('memoizes per variables and per matchArguments, not per document alone', () => {
+    const mocks = buildGraph(schema, { seed: 3, count: 6, stableIds: true });
+    const document = parse('query U($id: ID!) { user(id: $id) { id } }') as TypedDocumentNode<
+      { user: { id: string } },
+      { id: string }
+    >;
+
+    const two = mocks.resolveOnce(document, { id: 'User-2' }, true);
+    const four = mocks.resolveOnce(document, { id: 'User-4' }, true);
+    expect(two.user.id).toBe('User-2');
+    expect(four.user.id).toBe('User-4');
+    expect(mocks.resolveOnce(document, { id: 'User-2' }, true)).toBe(two);
+    // Same variables, argument matching off: a different question, so a fresh resolve.
+    expect(mocks.resolveOnce(document, { id: 'User-2' })).not.toBe(two);
+  });
+
+  it('keys by document identity, so a re-parse is a different document', () => {
+    const mocks = buildGraph(schema, { seed: 3, count: 6 });
+    expect(mocks.resolveOnce<Data>(parse(source))).not.toBe(mocks.resolveOnce<Data>(parse(source)));
+  });
+
+  it('infers the data type from a TypedDocumentNode', () => {
+    const mocks = buildGraph(schema, { seed: 3, count: 6 });
+    const document = parse(source) as TypedDocumentNode<Data, Record<string, never>>;
+    const { users } = mocks.resolveOnce(document);
+    expect(typeof users[0]?.name).toBe('string');
   });
 });
