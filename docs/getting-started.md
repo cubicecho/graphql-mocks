@@ -186,6 +186,21 @@ When a set of stories varies one shared base parameter, derive it with
 a short form — those keep the base's `overrides`, `target` and `build`, which
 `'loading'` on its own silently drops.
 
+For the family every stories file ends up writing, don't derive it by hand at
+all — `graphStories()` returns `Default` / `Loading` / `Errored`, and
+`graphListStories()` adds `NoResults` and `LongNames` against the QA shapes:
+
+```ts
+const stories = graphListStories({ graph: { target: 'Orders' } });
+
+export const Default: Story = stories.Default;
+export const NoResults: Story = stories.NoResults;
+```
+
+`graph` is the base all of them are layered on. A base that answers with its own
+rows (an `overrides` entry with `data`) beats a QA rebuild, so the list variant
+leaves the two QA members out rather than shipping a `NoResults` that shows rows.
+
 ## 4. Type the pools
 
 Pools are `unknown[]` until you say otherwise. Pass a type map:
