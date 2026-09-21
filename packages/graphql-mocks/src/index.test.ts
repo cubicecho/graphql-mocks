@@ -27,6 +27,7 @@ const EXPORTS = [
   'buildQaSets',
   'buildScalarsFromPaths',
   'composeScenarios',
+  'containsMocks',
   'createRequestHandler',
   'dataOf',
   'defaultScalarMockers',

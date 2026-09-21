@@ -136,7 +136,7 @@ export const DEFAULT_SEARCH_ARGS = [
   'term',
 ] as const;
 
-export interface PaginateArgsOptions {
+export interface PaginateArgsOptions<TTotalField extends string = string> {
   /**
    * Which properties the search term filters on. Every own string-valued property when
    * omitted — the same rule {@link searchItems} follows.
@@ -159,6 +159,27 @@ export interface PaginateArgsOptions {
    * @default true
    */
   flattenInputs?: boolean;
+  /**
+   * Stamp `matchedCount` onto every returned row under this name, for the flattened
+   * aggregate shape that has nowhere else to put the total:
+   *
+   * ```graphql
+   * type OrderCountByStatus {
+   *   status: OrderStatus!
+   *   count: Int!
+   *   totalCount: Int!   # the unpaged total, repeated on every row
+   * }
+   * ```
+   *
+   * The field returns a bare list, so a pager has to read the total off a row — the row-level
+   * counterpart to `countFields`, which does the same job for the `{ results, totalCount }`
+   * wrapper. Stamped rows are **shallow copies**: pooled objects are shared with the rest of
+   * the graph, and writing a page-specific total into one would leak it everywhere that row
+   * is reachable from. An existing value under this name is overwritten — that field was
+   * mocked from the schema and is exactly the stale number this option replaces — and a row
+   * that isn't an object is passed through untouched.
+   */
+  totalField?: TTotalField;
 }
 
 /** What {@link paginateArgs} worked out, so the caller can shape its own envelope. */
@@ -225,6 +246,29 @@ const isFiniteNumber = (value: unknown): value is number =>
 const isString = (value: unknown): value is string => typeof value === 'string';
 
 /**
+ * A row once `totalField` has stamped the page total on it. Falls back to the row as it was
+ * when the name isn't a literal — an options object typed as `PaginateArgsOptions` alone says
+ * a field is stamped but not which one, and a made-up index signature would be worse than
+ * silence.
+ */
+export type WithTotalField<T, TTotalField extends string> = string extends TTotalField
+  ? T
+  : T & { [K in TTotalField]: number };
+
+/**
+ * Copy each row with the page total written onto it. Copies rather than writes in place: these
+ * are pooled objects, reachable from every other object that relates to them, so a total that
+ * belongs to one page would otherwise become the answer everywhere. Whatever the name held
+ * before is replaced — on the shape this exists for it is a schema-mocked `Int`, i.e. the stale
+ * number — and a non-object row has nowhere to put it and passes through.
+ */
+function stampTotal<T>(rows: readonly T[], field: string, total: number): T[] {
+  return rows.map((row) =>
+    row !== null && typeof row === 'object' ? { ...row, [field]: total } : row,
+  );
+}
+
+/**
  * Search and page a list straight from a field's arguments — the preamble every `argOverrides`
  * handler otherwise writes by hand, and gets subtly wrong (a `limit` defaulting to `0` empties
  * the list; a `skip` defaulting to `undefined` pages differently from one defaulting to `0`):
@@ -246,12 +290,19 @@ const isString = (value: unknown): value is string => typeof value === 'string';
  *
  * Takes the override context itself, or any `{ args }` object — including a bare
  * `{ args: variables }` when the values come from somewhere else.
+ *
+ * A field that returns a flattened aggregate row rather than a wrapper has nowhere to put the
+ * total but the rows themselves; `totalField` stamps it on, so the handler is the one call:
+ *
+ * ```ts
+ * paginateArgs(rows, ctx, { searchFields: ['status'], totalField: 'totalCount' }).items;
+ * ```
  */
-export function paginateArgs<T>(
+export function paginateArgs<T, TTotalField extends string = never>(
   items: readonly T[],
   ctx: { args: Record<string, unknown> },
-  options: PaginateArgsOptions = {},
-): PaginatedArgs<T> {
+  options: PaginateArgsOptions<TTotalField> = {},
+): PaginatedArgs<WithTotalField<T, TTotalField>> {
   const lookup = argLookup(ctx.args ?? {}, options.flattenInputs ?? true);
 
   const search = firstOf(lookup, options.searchArgs ?? DEFAULT_SEARCH_ARGS, isString);
@@ -264,8 +315,13 @@ export function paginateArgs<T>(
     options.defaultLimit;
 
   const matched = searchItems(items, search, options.searchFields);
+  const page = paginate(matched, { skip, limit });
+  const stamped =
+    options.totalField === undefined ? page : stampTotal(page, options.totalField, matched.length);
+
   return {
-    items: paginate(matched, { skip, limit }),
+    // The stamp is a runtime key the element type can't be narrowed to in place.
+    items: stamped as WithTotalField<T, TTotalField>[],
     matchedCount: matched.length,
     totalCount: items.length,
     skip,
