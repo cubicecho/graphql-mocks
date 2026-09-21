@@ -180,6 +180,54 @@ The function is the same `(faker, { index, typeName, fieldName })` an `overrides
 Where you control the schema, a semantic scalar (`scalar URL`) is the better fix — this is for
 the names you can't retype, which in a stitched or generated schema is most of them.
 
+### Fixture pools: `fixtures`
+
+Every schema keeps a handful of small, closed, enum-like types — currencies, statuses, roles, plan
+tiers, priority levels. Generated values for those are worse than useless: a `Currency` whose
+`code` is `"eaque"` and whose `rate` is `613.47` turns every screen that formats money into noise.
+`fixtures` says what the pool *is*:
+
+```ts
+const mocks = buildMocks(schema, {
+  fixtures: {
+    Currency: [
+      { id: 'usd', code: 'USD', symbol: '$', rate: 1 },
+      { id: 'eur', code: 'EUR', symbol: '€', rate: 0.92 },
+      { id: 'jpy', code: 'JPY', symbol: '¥', rate: 157.2 },
+    ],
+  },
+});
+```
+
+Three rows of data instead of four `(_f, { index }) => CURRENCIES[index % 3].code` callbacks — and
+a field added to the list is pinned by having been written down, rather than silently staying
+generated until someone also adds an override for it. A `TTypes` map checks the **values**: with
+`Currency.rate` a `Float`, `{ rate: 'one' }` is a compile error, which the override form can't be
+because it erases to a `() => unknown`.
+
+- **A field a row omits keeps its generated value**, so a fixture pins the fields that matter and
+  lets `createdAt` be invented. The rows need not agree on which fields they carry.
+- **Relationships wire normally.** A `Post.currency` gets one of these objects, by reference — the
+  fixture objects *are* the pool, not copies of it.
+- **Sizing**: the pool is as long as the list. `count` wins where it names the type (or sets
+  `_default`, or is a flat number), and the rows cycle to fill it — `count: { Currency: 7 }` over
+  three rows gives `usd, eur, jpy, usd, eur, jpy, usd`. A `relations` size that asks for more
+  instances than the list carries raises the pool the same way, since relationship lists are drawn
+  without replacement. A QA `lists: 'huge'` profile does **not**: naming a type is the more
+  specific statement, the same way a per-type `listSize` outranks a profile.
+- **Precedence**: an `overrides` entry for the same field still wins, so one field can be varied
+  per instance; `derive` and `deriveObject` win over both, as they always do. A fixture beats
+  `fieldOverrides`, which is a sweep by field name. It also beats the generator outright, so a
+  pinned field ignores `nullChance` and the QA corpora.
+- **`stableIds` leaves a pinned field alone** — a fixture that names `id` has already said what the
+  identifier is, and `Currency-0` over `usd` would be a clobber. So does the `countFields` pass.
+- **Validated against the schema**, and it throws: an unknown type name, a type with no pool
+  (an operation, interface, union, enum or scalar type), an entry that isn't a list, an empty list
+  (write `count: { Currency: 0 }` to empty a pool), a row that isn't an object, or a key that is
+  not a field on the type.
+- **In a scenario layer** it merges one level deep: per type, a later layer's list replaces that
+  type's whole list rather than patching it row by row.
+
 ### Derived fields
 
 An override fires while the instance is half-built, so it cannot see its siblings. Any field whose value is a function of the rest of the object — a total over a list, a name assembled from its parts, a balance that is a difference of two others — belongs in `derive` instead:
@@ -1554,6 +1602,7 @@ The generated `typescript` types add `__typename?: 'User'` by default and wrap n
 | `scalars` | `Record<string, (faker) => unknown>` | — | Custom scalar mockers (merged over defaults) |
 | `overrides` | `Record<type, Record<field, (faker, ctx) => unknown>>` | — | Per-field replacement functions (receive the seeded faker and `{ index, typeName, fieldName }`). With a `TTypes` map, type/field keys autocomplete and each return type is bound to the field's type |
 | `fieldOverrides` | `Record<field, (faker, ctx) => unknown>` | — | [Overrides keyed by field name](#by-field-name-fieldoverrides), applied to every type carrying it. A key wrapped in slashes is a pattern; a type-keyed `overrides` entry wins |
+| `fixtures` | `Record<type, object[]>` | — | [Pin a type's pool to literal objects](#fixture-pools-fixtures) — the list *is* the pool, cycled to `count`. Omitted fields stay generated; `overrides` and `derive` still win, `stableIds` and `countFields` leave a pinned field alone |
 | `aliases` | `Record<type, Record<field, string \| string[]>>` | — | [Expose a field under extra names](#aliased-fields), for fragments that alias it. Same reference, applied last |
 | `derive` | `Record<type, Record<field, (self, ctx) => unknown>>` | — | Per-field functions computed from the **finished** object, after relationships are wired. Wins over `overrides` for the same field |
 | `deriveObject` | `Record<type, (self, ctx) => object>` | — | [One function per type](#fields-from-one-draw-deriveobject) returning a partial merged over the instance, for fields that come from a single correlated draw. Runs just before `derive`, which wins on a key both write |

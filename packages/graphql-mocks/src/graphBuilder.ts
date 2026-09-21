@@ -18,6 +18,7 @@ import {
 import { countedListFields, syncCountFields } from './countFields.js';
 import { resolveOperationData } from './executeOperation.js';
 import { expandFieldOverrides } from './fieldOverrides.js';
+import { fixturePoolSize, pinnedFields, validateFixtures } from './fixtures.js';
 import {
   OPERATION_TYPE_NAMES,
   resolveCount,
@@ -122,7 +123,7 @@ function planRelationFields(
   resolved: ResolvedOptions,
 ): FieldPlan[] {
   const plans: FieldPlan[] = [];
-  const overrides = resolved.overrides[objectType.name] ?? {};
+  const pinned = pinnedFields(objectType.name, resolved);
   // A list some count scalar counts holds the whole pool of what it points at, so the count and
   // the rows an argument-matched query pages through are totals of the same thing.
   const counted = countedListFields(objectType, resolved);
@@ -159,7 +160,7 @@ function planRelationFields(
       plan.isRequired &&
       !plan.isList &&
       targetPool?.length === 0 &&
-      overrides[plan.fieldName] === undefined
+      pinned[plan.fieldName] === undefined
     ) {
       console.warn(
         `[graphql-mocks] Field "${objectType.name}.${plan.fieldName}" is non-null but the "${targetName}" pool is empty — the field will be null, which nulls any query selecting it`,
@@ -570,7 +571,8 @@ function applyDerive(
  * Only string-valued scalars are replaced beyond `id` itself: the widened set is matched by
  * name, and writing `Order-externalId-0` over an `Int` or an enum would hand back data the
  * schema rejects. An `overrides` entry for the field still wins, and is the way to keep a
- * recognized field random.
+ * recognized field random; so does a `fixtures` row pinning it — a fixture that names `id` has
+ * already said what the identifier is, and `Currency-0` over `usd` would be a clobber.
  */
 function applyStableIds(
   instance: Record<string, unknown>,
@@ -579,10 +581,10 @@ function applyStableIds(
   resolved: ResolvedOptions,
 ): void {
   const { idPrefix } = resolved;
-  const overrides = resolved.overrides[objectType.name] ?? {};
+  const pinned = pinnedFields(objectType.name, resolved);
 
   for (const [fieldName, field] of Object.entries(objectType.getFields())) {
-    if (!(fieldName in instance) || overrides[fieldName] !== undefined) continue;
+    if (!(fieldName in instance) || pinned[fieldName] !== undefined) continue;
 
     if (fieldName === 'id') {
       instance.id = `${idPrefix}${objectType.name}-${index}`;
@@ -599,6 +601,7 @@ function applyStableIds(
 export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): MockResult {
   const resolved = expandFieldOverrides(schema, resolveOptions(options));
   validateRelations(schema, resolved.relations);
+  validateFixtures(schema, resolved.fixtures);
   validateListSize(schema, resolved.listSizes);
   validateUniqueLists(schema, resolved.uniqueListsConfig);
   validateAliases(schema, resolved.aliases);
@@ -618,12 +621,14 @@ export function buildGraph(schema: GraphQLSchema, options: BuildMocksOptions): M
   for (const objectType of objectTypes) {
     // `defaultCount` already accounts for a `huge` list profile needing pools at least as
     // large as the target length, since lists are sampled without replacement; `demand` does
-    // the same for the sizes `relations` asks for. An explicit `count` still wins over both.
-    const count = resolveCount(
-      objectType.name,
-      resolved.count,
-      Math.max(resolved.defaultCount, demand[objectType.name] ?? 0),
-    );
+    // the same for the sizes `relations` asks for. A `fixtures` list replaces `defaultCount`
+    // outright — it *is* the pool. An explicit `count` still wins over all of it.
+    const demanded = demand[objectType.name] ?? 0;
+    const rows = resolved.fixtures?.[objectType.name];
+    const fallback = rows
+      ? fixturePoolSize(rows, demanded)
+      : Math.max(resolved.defaultCount, demanded);
+    const count = resolveCount(objectType.name, resolved.count, fallback);
     pool[objectType.name] = Array.from({ length: count }, (_, index) => {
       const instance = mockTypeScalars(objectType, resolved, index);
       if (addTypename) instance.__typename = objectType.name;

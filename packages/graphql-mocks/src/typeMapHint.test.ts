@@ -7,6 +7,7 @@ import type {
   DeriveConfig,
   DeriveContext,
   FieldDeriveFn,
+  FixturesConfig,
   ObjectDeriveConfig,
   OverridesConfig,
 } from './types.js';
@@ -202,5 +203,45 @@ describe('a TTypes map on an object derive', () => {
     expect(mocks.User[0]?.name).toBe('Ada');
     const user = mocks.User[0] as Record<string, unknown>;
     expect(user.todoCount).toBe(mocks.User[0]?.todos.length);
+  });
+});
+
+describe('a TTypes map on fixtures', () => {
+  it("binds a pinned value to the field's own type", () => {
+    const fixtures: FixturesConfig<TestTypes> = {
+      User: [
+        {
+          name: 'Ada',
+          // @ts-expect-error — `loginCount` is a number in the map, and the map still rules.
+          loginCount: 'many',
+        },
+      ],
+    };
+
+    expect(fixtures.User).toHaveLength(1);
+  });
+
+  it('accepts a field the map does not carry', () => {
+    const fixtures: FixturesConfig<TestTypes> = { User: [{ name: 'Ada', headline: 'engineer' }] };
+
+    expect(fixtures.User).toHaveLength(1);
+  });
+
+  it('still checks type names', () => {
+    const options: BuildMocksOptions<TestTypes> = {
+      // @ts-expect-error — `Post` is not a key of the map.
+      fixtures: { Post: [{ title: 'Hello' }] },
+    };
+
+    expect(options.fixtures).toBeDefined();
+  });
+
+  it('pins what it names on a parameterized buildMocks call', () => {
+    const mocks = buildMocks<TestTypes>(schema, {
+      seed: 5,
+      fixtures: { User: [{ name: 'Ada' }, { name: 'Grace' }] },
+    });
+
+    expect(mocks.User.map((user) => user.name)).toEqual(['Ada', 'Grace']);
   });
 });

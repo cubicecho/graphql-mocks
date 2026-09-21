@@ -1,4 +1,5 @@
 import { type GraphQLObjectType, type GraphQLSchema, isObjectType } from 'graphql';
+import { pinnedFields } from './fixtures.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import type { FieldOverrideFn, OverridesConfig } from './types.js';
 
@@ -50,6 +51,10 @@ function pooledTypes(schema: GraphQLSchema) {
  * an exact name beats a pattern, an earlier pattern beats a later one, and a type-keyed entry
  * for the same field beats both — so the general rule stays overridable for a single type.
  *
+ * A `fixtures` row pinning the field shadows it for the same reason: naming one type and one
+ * field is the more specific statement, and a sweep like `'/Url$/'` silently replacing a
+ * pinned `iconUrl` would be the surprise this precedence exists to prevent.
+ *
  * Returns `resolved` untouched when there is nothing to expand, so the common path allocates
  * nothing.
  */
@@ -90,13 +95,14 @@ export function expandFieldOverrides(
   for (const type of pooledTypes(schema)) {
     if (!isObjectType(type)) continue;
     const typeEntry = resolved.overrides[type.name];
+    const pinned = pinnedFields(type.name, resolved);
     let expanded: Record<string, FieldOverrideFn> | undefined;
 
     for (const fieldName of Object.keys(type.getFields())) {
       const fn = find(fieldName);
-      // Still "matched" when a type-keyed entry shadows it: a name the schema carries is not
-      // the typo the warning below is looking for.
-      if (!fn || typeEntry?.[fieldName] !== undefined) continue;
+      // Still "matched" when a type-keyed entry or a fixture shadows it: a name the schema
+      // carries is not the typo the warning below is looking for.
+      if (!fn || pinned[fieldName] !== undefined) continue;
       expanded ??= {};
       expanded[fieldName] = fn;
     }
