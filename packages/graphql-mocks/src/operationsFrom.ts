@@ -18,6 +18,22 @@ export type OperationMocks<TModule extends OperationModule> = {
     : never;
 };
 
+/**
+ * Brands the map {@link buildOperationMocks} returns. Its entries are lazy getters, so the only
+ * way to answer "does this module hold mocks?" without building every operation in it is to
+ * recognise the map itself and read its key list — a structural test would have to read a value,
+ * which is the one thing the map is built to avoid.
+ *
+ * `Symbol.for` so two copies of the package in one dependency tree still recognise each other's
+ * maps, and non-enumerable where it is set, so spreading or walking a map never sees it.
+ */
+export const OPERATION_MOCKS = Symbol.for('@vantreeseba/graphql-mocks.operationMocks');
+
+/** A map built by {@link buildOperationMocks}, recognised without reading a single entry. */
+export function isOperationMocks(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && OPERATION_MOCKS in value;
+}
+
 /** Builds the variants for one document — supplied by the graph. */
 export type VariantsBuilder = (document: DocumentNode, options?: MockOperationOptions) => unknown;
 
@@ -37,7 +53,8 @@ function isOperationDocument(value: unknown): value is DocumentNode {
  *
  * Entries are **lazy**: each is built on first access and then cached, so importing a module
  * with fifty documents does not run fifty executions at import time. Spreading the map (or
- * `Object.values`) forces every entry; `Object.keys` does not.
+ * `Object.values`) forces every entry; `Object.keys` does not, and neither does `containsMocks`,
+ * which recognises the map by its brand and answers from those keys.
  *
  * Two export names aliasing the same document share one variants object, so their mocks stay
  * identical instead of drawing separately.
@@ -84,6 +101,9 @@ export function buildOperationMocks<TModule extends OperationModule>(
       },
     });
   }
+
+  // Non-enumerable, so it stays out of `Object.keys`, spreads and every walk over the map.
+  Object.defineProperty(result, OPERATION_MOCKS, { value: true });
 
   return result as OperationMocks<TModule>;
 }
