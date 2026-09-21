@@ -5,6 +5,7 @@
       "**/dist/**",
       "**/coverage/**",
       "**/node_modules/**",
+      "site/**",
       "**/package.json",
       "package-lock.json",
       "CHANGELOG.md"
