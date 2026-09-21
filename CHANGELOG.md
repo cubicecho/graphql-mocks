@@ -1,3 +1,20 @@
+# [5.1.0](https://github.com/cubicecho/graphql-mocks/compare/v5.0.0...v5.1.0) (2026-09-21)
+
+
+### Bug Fixes
+
+* **graphql-mocks:** make a precisely typed derive block assignable ([4f5836f](https://github.com/cubicecho/graphql-mocks/commit/4f5836fb58f8fa05f13207c6e9052e28251d261e))
+
+
+### Features
+
+* **apollo:** ship the Default/Loading/Errored story family as a factory ([441ca34](https://github.com/cubicecho/graphql-mocks/commit/441ca34c9062237014e6af56094575ba7e022bf0))
+* **graphql-mocks:** add `fixtures`, a literal pool per type ([ca671e7](https://github.com/cubicecho/graphql-mocks/commit/ca671e7d97b75e243850798c112ec86a0205b9a2)), closes [#62](https://github.com/cubicecho/graphql-mocks/issues/62)
+* **graphql-mocks:** add containsMocks and validateMocks allowEmpty ([3b273fb](https://github.com/cubicecho/graphql-mocks/commit/3b273fb25ccef8c2e28e183770b6c193e0b327c6))
+* **graphql-mocks:** add paginateArgs totalField for flattened rows ([b3783ce](https://github.com/cubicecho/graphql-mocks/commit/b3783ce4d3d6b94c139e0eca3d716a14bd8289d9)), closes [#66](https://github.com/cubicecho/graphql-mocks/issues/66)
+* **graphql-mocks:** build scalar mockers from a dotted faker path ([0b22fe7](https://github.com/cubicecho/graphql-mocks/commit/0b22fe7bdb264f7cce7f50dc387ae550dda35de8))
+* **graphql-mocks:** resolveOnce, byIdOrIndex and a typed RelationPredicate ([6499e81](https://github.com/cubicecho/graphql-mocks/commit/6499e818cff2cd870bfeca7a60255b5f9d0019c9))
+
 # [5.0.0](https://github.com/cubicecho/graphql-mocks/compare/v4.2.0...v5.0.0) (2026-09-20)
 
 
