@@ -34,6 +34,7 @@ export type {
   FieldDeriveFn,
   FieldOverrideFn,
   FieldOverridesConfig,
+  FixturesConfig,
   ListSizeConfig,
   ListSizeRangeConfig,
   MockHelpers,

@@ -296,6 +296,25 @@ export type ObjectDeriveConfig<TTypes extends Record<string, unknown> = Record<s
   [K in keyof TTypes]?: TypeObjectDerive<TTypes[K]>;
 };
 
+// One fixture row. Like `DerivedObject`, the mapped fields are bound to their own types and
+// anything else is accepted — the check that matters here is on the *values*, which is what
+// the per-field override form erases by turning each one into a `() => unknown` callback.
+// A key the type does not carry is caught at build time instead, by `validateFixtures`.
+type FixtureRowFor<T> = unknown extends T
+  ? Record<string, unknown>
+  : Partial<T> & Record<string, unknown>;
+
+/**
+ * Per-type fixture pools: *this type's pool **is** these objects*, cycled to fill it.
+ *
+ * With a `TTypes` map, type names are checked and each pinned field's value is bound to that
+ * field's own type, so `{ rate: 'one' }` on a `Float` is a compile error. There is no callback
+ * anywhere in the shape, so nothing here depends on contextual typing.
+ */
+export type FixturesConfig<TTypes extends Record<string, unknown> = Record<string, unknown>> = {
+  [K in keyof TTypes]?: readonly FixtureRowFor<TTypes[K]>[];
+};
+
 /**
  * How many related objects a relationship field gets. A number is an exact size, a
  * `{ min, max }` range picks a random size in between, `'all'` takes the whole target pool,
@@ -616,6 +635,36 @@ export interface BuildMocksOptions<
    * Return value replaces the generated value for that field entirely.
    */
   overrides?: OverridesConfig<TTypes>;
+  /**
+   * Pin a type's pool to a literal list of objects — for the small, closed, enum-like types a
+   * schema keeps a handful of: currencies, statuses, roles, plan tiers, priority levels.
+   *
+   * ```ts
+   * fixtures: {
+   *   Currency: [
+   *     { id: 'usd', code: 'USD', symbol: '$', rate: 1 },
+   *     { id: 'eur', code: 'EUR', symbol: '€', rate: 0.92 },
+   *   ],
+   * }
+   * ```
+   *
+   * Reads as *this type's pool is these objects*. A field a row omits keeps its generated
+   * value, so a fixture pins the three fields that matter and lets `createdAt` be invented, and
+   * relationships wire normally, so a `Post.currency` gets one of these objects.
+   *
+   * **Sizing.** The pool is the length of the list, unless `count` says otherwise for the type
+   * — then the rows cycle to that size. A `relations` size that demands more instances than the
+   * list carries raises the pool the same way, since relationship lists are drawn without
+   * replacement; the extra instances cycle back through the rows.
+   *
+   * **Precedence.** An `overrides` (or `fieldOverrides`-expanded) entry for the same field still
+   * wins, so one field can be varied per instance; `derive`/`deriveObject` win over both, as
+   * they always do. `stableIds` leaves a pinned `id` alone, and so does the `countFields` pass.
+   *
+   * Validated against the schema: an unknown type name, an empty list, a row that is not an
+   * object, or a key that is not a field on the type throws.
+   */
+  fixtures?: FixturesConfig<TTypes>;
   /**
    * Override functions keyed by field name rather than by type, so one entry covers every type
    * carrying that field. A key wrapped in slashes is a pattern. A type-keyed `overrides` entry

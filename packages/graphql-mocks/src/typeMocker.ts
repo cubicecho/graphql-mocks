@@ -8,6 +8,7 @@ import {
   isNonNullType,
   isScalarType,
 } from 'graphql';
+import { fixtureRowAt } from './fixtures.js';
 import type { ListSizeRange } from './helpers.js';
 import { qaFallbackText } from './qa.js';
 import { type ResolvedOptions, listSizeFor, uniqueListFor } from './resolveOptions.js';
@@ -122,6 +123,9 @@ export function mockTypeScalars(
   const result: Record<string, unknown> = {};
   const { faker, qa, qaScalars, nullChance } = resolved;
   const typeOverrides = resolved.overrides[typeDef.name] ?? {};
+  // Cycled here rather than per field: every field of one instance is pinned by the same row.
+  const fixtureRows = resolved.fixtures?.[typeDef.name];
+  const fixture = fixtureRows && fixtureRowAt(fixtureRows, index);
 
   for (const [fieldName, field] of Object.entries(fields)) {
     if (typeOverrides[fieldName]) {
@@ -130,6 +134,15 @@ export function mockTypeScalars(
         typeName: typeDef.name,
         fieldName,
       });
+      continue;
+    }
+
+    // A fixture row is the declared value for this instance, so it beats everything the
+    // generator would draw — including a `nullChance` roll and a QA corpus. Only `overrides`,
+    // which exists to vary a field per instance, outranks it. A key the row omits falls
+    // through, which is what makes a fixture a partial statement about the type.
+    if (fixture && fieldName in fixture) {
+      result[fieldName] = fixture[fieldName];
       continue;
     }
 

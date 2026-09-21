@@ -1,5 +1,6 @@
 import type { Faker } from '@faker-js/faker';
 import type { ArgMatchingOptions } from './argMatching.js';
+import type { LooseFixturesMap } from './fixtures.js';
 import {
   type ListSizeRange,
   lookupListSize,
@@ -96,6 +97,11 @@ export interface ResolvedOptions {
   scalars: Record<string, ScalarMocker> | undefined;
   overrides: OverridesConfig;
   /**
+   * Literal pools, per type, as written. Read both by the generator (which pins each field a
+   * row carries) and by `buildGraph`, which sizes the pool from the list.
+   */
+  fixtures: LooseFixturesMap | undefined;
+  /**
    * Left unexpanded here: turning "every `imageUrl`" into per-type entries needs the schema,
    * which `resolveOptions` has no access to. `expandFieldOverrides` folds it into `overrides`
    * before anything reads them.
@@ -147,6 +153,7 @@ export function resolveOptions(rawOptions: BuildMocksOptions): ResolvedOptions {
     idPrefix: options.idPrefix ?? '',
     scalars: options.scalars,
     overrides: options.overrides ?? {},
+    fixtures: options.fixtures,
     fieldOverrides: options.fieldOverrides,
     aliases: options.aliases,
     derive: options.derive,

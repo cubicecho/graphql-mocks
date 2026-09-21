@@ -5,6 +5,7 @@ import {
   isObjectType,
   isScalarType,
 } from 'graphql';
+import { pinnedFields } from './fixtures.js';
 import type { ResolvedOptions } from './resolveOptions.js';
 import { unwrapType } from './typeMocker.js';
 
@@ -149,6 +150,7 @@ export function resolveCountSync(resolved: ResolvedOptions): CountSync | null {
 export function pairCountFields(
   objectType: GraphQLObjectType,
   sync: CountSync,
+  /** The fields a caller pinned by hand — an `overrides` entry, or a `fixtures` row's key. */
   overrides: Record<string, unknown>,
   /** Off for the phase 2 pass, which walks the same pairings before the lists exist. */
   warn = true,
@@ -195,7 +197,8 @@ export function pairCountFields(
 
   for (const countField of countCandidates) {
     if (claimed.has(countField)) continue;
-    // An explicit `overrides` entry is a deliberate value; an inferred pairing doesn't outrank it.
+    // A hand-written value — an `overrides` entry or a `fixtures` row's key — is deliberate;
+    // an inferred pairing doesn't outrank it.
     if (overrides[countField] !== undefined) continue;
 
     const classified = classifyCountField(countField);
@@ -238,8 +241,7 @@ export function countedListFields(
 ): Set<string> {
   const sync = resolveCountSync(resolved);
   if (!sync?.sizeLists) return new Set();
-  const overrides = resolved.overrides[objectType.name] ?? {};
-  const pairs = pairCountFields(objectType, sync, overrides, false);
+  const pairs = pairCountFields(objectType, sync, pinnedFields(objectType.name, resolved), false);
   return new Set(pairs.map(([, listField]) => listField));
 }
 
@@ -268,7 +270,7 @@ export function countsForList(
 
   const patch: Record<string, number> = {};
   // Silent: phase 4 already walked these same pairings and warned about the ambiguous ones.
-  const pairs = pairCountFields(objectType, sync, resolved.overrides[objectType.name] ?? {}, false);
+  const pairs = pairCountFields(objectType, sync, pinnedFields(objectType.name, resolved), false);
   for (const [countField, paired] of pairs) {
     if (paired === listField) patch[countField] = length;
   }
@@ -291,7 +293,7 @@ export function syncCountFields(
     const instances = pool[objectType.name] ?? [];
     if (instances.length === 0) continue;
 
-    const pairs = pairCountFields(objectType, sync, resolved.overrides[objectType.name] ?? {});
+    const pairs = pairCountFields(objectType, sync, pinnedFields(objectType.name, resolved));
     if (pairs.length === 0) continue;
 
     for (const instance of instances) {
